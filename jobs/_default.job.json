@@ -1,0 +1,154 @@
+{
+  "job_version": 1,
+  "meta": {
+    "job_id": "example.org",
+    "name": "Example Website",
+    "description": "Default template for Blink v3 jobs.",
+    "enabled": true,
+    "tags": []
+  },
+  "target": {
+    "base_url": "https://example.org",
+    "allowed_domains": [
+      "example.org"
+    ],
+    "start_urls": [],
+    "follow_subdomains": false
+  },
+  "crawl": {
+    "render_mode": "playwright",
+    "user_agent": "Blink/3.0",
+    "request_delay_seconds": 1.0,
+    "max_pages_per_run": 0,
+    "max_depth": null,
+    "parse_querystring": false,
+    "parse_fragments": true,
+    "timeouts": {
+      "navigation_seconds": 20,
+      "network_idle_seconds": 4,
+      "playwright_wait_seconds": 2
+    },
+    "retry_count": 2,
+    "max_response_bytes": 2000000,
+    "concurrency": 1,
+    "browser": {
+      "viewport": {
+        "width": 1366,
+        "height": 768
+      },
+      "locale": "en-US",
+      "timezone_id": "UTC",
+      "extra_http_headers": {},
+      "storage_state_path": null,
+      "persist_storage_state": false,
+      "headless": true,
+      "block_request_netloc_contains": [
+        "google-analytics.com",
+        "googletagmanager.com",
+        "google.com"
+      ]
+    },
+    "observability": {
+      "log_console": false,
+      "log_non_2xx_responses": true,
+      "log_request_failures": true,
+      "save_failure_screenshot": true,
+      "save_failure_html": false
+    }
+  },
+  "ignore": {
+    "http_status": [
+      400,
+      403,
+      429,
+      999
+    ],
+    "url_schemes": [
+      "mailto",
+      "ftp",
+      "tel",
+      "javascript"
+    ],
+    "netloc_contains": [
+      "localhost",
+      "google-analytics.com",
+      "youtube-nocookie.com",
+      "linkedin.com",
+      "discord.gg",
+      "youtu.be",
+      "youtube.com",
+      "twitter.com",
+      "x.com"
+    ],
+    "path_contains": [],
+    "path_extensions": [
+      ".avi",
+      ".webm",
+      ".flv",
+      ".mkv",
+      ".wmv",
+      ".mov",
+      ".iso"
+    ],
+    "fragment_contains": []
+  },
+  "content": {
+    "history_keep": 8,
+    "extract_main_text": true,
+    "store_rendered_html": false,
+    "main_text_extractor": "trafilatura",
+    "significant_change_threshold_percent": 25,
+    "text_compare_max_chars": 100000
+  },
+  "link_check": {
+    "enabled": true,
+    "request_timeout_seconds": 10,
+    "retry_count": 1,
+    "consecutive_failures_before_alert": 2,
+    "follow_redirects": true,
+    "write_json_report": false
+  },
+  "schedule": {
+    "timezone": "UTC",
+    "overlap_policy": "skip",
+    "crawl": {
+      "enabled": true,
+      "mode": "interval",
+      "expression": "24h",
+      "jitter_seconds": 45,
+      "max_runtime_seconds": 7200,
+      "startup_delay_seconds": 15
+    },
+    "link_check": {
+      "enabled": true,
+      "mode": "interval",
+      "expression": "6h",
+      "jitter_seconds": 30,
+      "max_runtime_seconds": 3600,
+      "startup_delay_seconds": 30
+    },
+    "maintenance_windows": []
+  },
+  "slack": {
+    "enabled": false,
+    "channel_id": "",
+    "webhook_env": "BLINK_SLACK_WEBHOOK_URL",
+    "bot_token_env": "BLINK_SLACK_BOT_TOKEN",
+    "emoji_actions": {
+      "ignore": "x",
+      "claim": "eyes"
+    },
+    "reminders": {
+      "enabled": true,
+      "days_after_first_alert": [
+        3,
+        7,
+        14
+      ]
+    }
+  },
+  "features": {
+    "ref_counters": [],
+    "netlocs_counted": []
+  }
+}
