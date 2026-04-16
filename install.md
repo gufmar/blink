@@ -46,3 +46,12 @@ playwright install --with-deps chromium
 ```
 
 After this one-time setup, jump to the workflow commands in `README.md`.
+
+## Updating an existing install
+
+After `git pull`, reinstall so new dependencies from `pyproject.toml` are applied (for example `lxml_html_clean`, required for trafilatura / crawl text extraction on newer `lxml`):
+
+```bash
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
+```
