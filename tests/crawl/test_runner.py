@@ -64,7 +64,14 @@ def test_run_crawl_bounded_and_persists(tmp_path: Path) -> None:
     connection = connect_sqlite(tmp_path / "crawl.db")
     initialize_schema(connection)
     repo = CrawlRepository(connection)
-    summary = run_crawl(config=config, repository=repo, renderer=renderer, max_pages_override=2)
+    statuses: list[str] = []
+    summary = run_crawl(
+        config=config,
+        repository=repo,
+        renderer=renderer,
+        max_pages_override=2,
+        status_hook=statuses.append,
+    )
 
     assert summary.pages_visited == 2
     assert summary.pages_failed == 0
@@ -73,10 +80,10 @@ def test_run_crawl_bounded_and_persists(tmp_path: Path) -> None:
     assert summary.challenged_pages == 0
     assert summary.non_2xx_pages == 0
     assert summary.request_failures == 0
-    assert "http_status" in summary.ignore_internal_skipped
-    assert summary.ignore_internal_skipped["http_status"] == 0
     assert renderer.opened is True
     assert renderer.closed is True
+    assert statuses
+    assert "Crawling depth=0 progress=" in statuses[0]
 
     pages_count = connection.execute("SELECT COUNT(*) FROM crawl_pages").fetchone()[0]
     links_count = connection.execute("SELECT COUNT(*) FROM crawl_links").fetchone()[0]

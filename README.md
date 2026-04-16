@@ -62,6 +62,13 @@ Run link checks for a specific crawl run and limit:
 blink link-check run --job jobs/cardano.org.job.json --db db.sqlite3 --run-id 2 --limit 25
 ```
 
+Control live output in `link-check run`:
+
+```bash
+blink link-check run --job jobs/cardano.org.job.json --show-live-failures --show-progress
+blink link-check run --job jobs/cardano.org.job.json --hide-live-failures --hide-progress
+```
+
 Inspect link-check results (latest check per target URL for a run):
 
 ```bash
@@ -78,7 +85,9 @@ Default runtime paths are now per job id:
 
 On each crawl or link-check run, missing `db/`, `logs/`, or `artifacts/` folders are created. If the SQLite file is missing (e.g. renamed away), a new empty database with the current schema is created at the canonical path.
 
-After a crawl, the console and log include **internal links skipped by ignore.*** counts per config section. `http_status` is always `0` during link extraction (that rule applies to HTTP responses, not hrefs).
+After a crawl, the console and log include **internal links skipped by ignore.*** counts per config section (URL-based rules only).
+
+`link_check.http_status` now controls which external-link HTTP status codes are ignored during link-check execution.
 
 Run crawl using default per-job DB path:
 
@@ -229,3 +238,58 @@ Run tests:
 ```bash
 python3 -m pytest -q
 ```
+
+## Generic notifications (Step 11)
+
+Job config now uses `notifications` (breaking change from legacy `slack` block).
+
+Example:
+
+```json
+"notifications": {
+  "enabled": true,
+  "destinations": [
+    {
+      "type": "slack",
+      "id": "slack-primary",
+      "enabled": true,
+      "channel_id": "C04HMBZFY9Y",
+      "webhook_env": "BLINK_SLACK_WEBHOOK_URL",
+      "bot_token_env": "BLINK_SLACK_BOT_TOKEN",
+      "action_aliases": {
+        "ignore": "see_no_evil",
+        "claim": "bust_in_silhouette",
+        "on_hold": "double_vertical_bar",
+        "resolve": "white_check_mark",
+        "retest": "curly_loop"
+      },
+      "lifecycle": {
+        "enabled": true,
+        "post_alerts_via_bot": true,
+        "on_hold_default_days": 7,
+        "on_hold_max_days": 90,
+        "ignore_default_days": 30,
+        "ignore_allow_infinite": true
+      },
+      "reminders": {
+        "enabled": true,
+        "days_after_first_alert": [2, 5, 10]
+      }
+    }
+  ]
+}
+```
+
+Notes:
+
+- Blink core lifecycle/action handling is destination-agnostic; Slack is the first implemented adapter.
+- **Slack thread-first lifecycle (Step 12):** when `lifecycle.enabled` is true and `post_alerts_via_bot` is true (default), broken-link alerts are posted with `chat.postMessage` using `bot_token_env`, then a thread bootstrap lists emoji actions and command overrides. `action_aliases.retest` (default `curly_loop`) queues an immediate single-link retest; `blink link-check run` processes the queue at the start of each run and replies in the same thread.
+- `blink notifications slack handle-event --job <job.json> --event event.json` applies one Slack `reaction_added` / `message` payload to the job SQLite DB (use for local testing).
+- **Slack Events API (Step 13):** `uvicorn` is included in the default install. After `pip install -e .` (or `pip install .` in production), run `blink serve --host 0.0.0.0 --port 8080` (optional `--jobs-root` defaults to `<repo>/jobs`). Configure Slack’s Request URL to `https://<your-host>/notifications/slack/job/<slug>` where `<slug>` matches `<slug>.job.json` under the jobs root (e.g. `cardano.org` → `jobs/cardano.org.job.json`). Set the signing secret in the env named by `notifications.slack_signing_secret_env` (default `BLINK_SLACK_SIGNING_SECRET`). Each Slack app has one Request URL; use a distinct URL path (and app) per job, or later add routing by channel. TLS is usually handled by a reverse proxy.
+- `blink notifications test --job jobs/cardano.org.job.json` sends a greeting/test message with job metadata.
+- `blink link-check run` dispatches notifications for newly discovered reportable broken links.
+- `blink link-check run --max-blinks 1` limits how many new broken links are notified per run (flood protection).
+- Previously reported open links are tracked in DB and not re-notified every run; they are only sent again when reminder timing is due.
+- `notifications.crawl_summary_on_run` enables crawl summary messages after each crawl run.
+- If a destination credential env var is missing (e.g. webhook URL), dispatch is skipped and logged.
+- Legacy top-level `slack` config no longer validates.

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from app.crawl.text_compare import main_text_similarity_and_change_percent
 
@@ -67,12 +69,27 @@ class ExternalLinkSourcePageRecord:
 
 
 @dataclass(frozen=True)
+class ExternalLinkSourceRefRecord:
+    source_page_url: str
+    anchor_text: str | None
+
+
+@dataclass(frozen=True)
 class PageContentMetricRecord:
     url: str
     text_similarity_prev: float | None
     text_change_percent_prev: float | None
     text_compared_to_run_id: int | None
     text_significant_change: bool | None
+
+
+@dataclass(frozen=True)
+class PageTextRecord:
+    run_id: int
+    url: str
+    created_at: str
+    text_len: int
+    main_text: str
 
 
 @dataclass(frozen=True)
@@ -85,6 +102,117 @@ class LinkCheckResultRecord:
     ok: bool
     error_message: str | None
     checked_at: str
+    error_category: str | None = None
+    decision_state: str | None = None
+    ignore_rule_id: int | None = None
+    decision_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class LinkCheckScreenshotRecord:
+    screenshot_id: int
+    link_check_result_id: int | None
+    crawl_run_id: int
+    target_url: str
+    status_code: int | None
+    error_message: str | None
+    artifact_file: str
+    created_at: str
+
+
+@dataclass(frozen=True)
+class LinkIgnoreRuleRecord:
+    rule_id: int
+    job_id: str
+    match_type: str
+    pattern: str
+    reason: str | None
+    active: bool
+    created_at: str
+    expires_at: str | None
+    created_by: str | None
+    source: str
+
+
+@dataclass(frozen=True)
+class LinkFailureStateRecord:
+    job_id: str
+    target_url: str
+    error_category: str
+    first_failed_at: str
+    last_failed_at: str
+    consecutive_failures: int
+    last_status_code: int | None
+    last_error_message: str | None
+    last_ok_at: str | None
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class LinkAlertRecord:
+    alert_id: int
+    job_id: str
+    target_url: str
+    state: str
+    first_reported_at: str
+    last_reported_at: str | None
+    last_reported_run_id: int | None
+    last_seen_checked_at: str | None
+    last_status_code: int | None
+    last_error_message: str | None
+    reminder_sent_count: int
+    hold_until: str | None
+    resolved_at: str | None
+    slack_destination_id: str | None = None
+    slack_channel_id: str | None = None
+    slack_root_ts: str | None = None
+    slack_thread_ts: str | None = None
+    slack_bootstrap_ts: str | None = None
+    human_bucket: str | None = None
+    owner_actor_id: str | None = None
+    ignore_until: str | None = None
+
+
+@dataclass(frozen=True)
+class LinkAlertEventRecord:
+    event_id: int
+    alert_id: int
+    event_type: str
+    actor_id: str | None
+    payload_json: str | None
+    created_at: str
+
+
+@dataclass(frozen=True)
+class LinkRetestQueueRecord:
+    retest_id: int
+    job_id: str
+    alert_id: int | None
+    target_url: str
+    slack_destination_id: str | None
+    slack_channel_id: str
+    slack_thread_ts: str
+    requested_by: str | None
+    status: str
+    result_ok: bool | None
+    result_status_code: int | None
+    result_error_message: str | None
+    created_at: str
+    processed_at: str | None
+
+
+@dataclass(frozen=True)
+class IgnoreRuleImpactRecord:
+    rule_id: int
+    job_id: str
+    match_type: str
+    pattern: str
+    reason: str | None
+    active: bool
+    expires_at: str | None
+    target_url: str
+    source_page_url: str | None
+    anchor_text: str | None
 
 
 class CrawlRepository:
@@ -169,7 +297,14 @@ class CrawlRepository:
         )
         self._connection.commit()
 
-    def add_link(self, run_id: int, source_url: str, target_url: str, is_internal: bool) -> None:
+    def add_link(
+        self,
+        run_id: int,
+        source_url: str,
+        target_url: str,
+        is_internal: bool,
+        anchor_text: str | None = None,
+    ) -> None:
         if not is_internal:
             external_link_id = self._upsert_external_link(target_url=target_url, run_id=run_id)
             self._connection.execute(
@@ -191,10 +326,17 @@ class CrawlRepository:
                 self._connection.execute(
                     """
                     INSERT INTO run_page_external_links(run_id, page_id, external_link_id, anchor_text)
-                    VALUES (?, ?, ?, NULL)
-                    ON CONFLICT(run_id, page_id, external_link_id) DO NOTHING
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(run_id, page_id, external_link_id) DO UPDATE SET
+                        anchor_text = CASE
+                            WHEN (run_page_external_links.anchor_text IS NULL OR TRIM(run_page_external_links.anchor_text) = '')
+                                 AND excluded.anchor_text IS NOT NULL
+                                 AND TRIM(excluded.anchor_text) != ''
+                            THEN excluded.anchor_text
+                            ELSE run_page_external_links.anchor_text
+                        END
                     """,
-                    (run_id, page_id, external_link_id),
+                    (run_id, page_id, external_link_id, anchor_text),
                 )
         # Keep legacy row for transition compatibility.
         self._connection.execute(
@@ -297,8 +439,12 @@ class CrawlRepository:
         status_code: int | None,
         ok: bool,
         error_message: str | None,
-    ) -> None:
-        self._connection.execute(
+        error_category: str | None = None,
+        decision_state: str | None = None,
+        ignore_rule_id: int | None = None,
+        decision_reason: str | None = None,
+    ) -> int:
+        cursor = self._connection.execute(
             """
             INSERT INTO link_check_results(
                 crawl_link_id,
@@ -306,12 +452,94 @@ class CrawlRepository:
                 target_url,
                 status_code,
                 ok,
-                error_message
-            ) VALUES (?, ?, ?, ?, ?, ?)
+                error_message,
+                error_category,
+                decision_state,
+                ignore_rule_id,
+                decision_reason
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (crawl_link_id, crawl_run_id, target_url, status_code, int(ok), error_message),
+            (
+                crawl_link_id,
+                crawl_run_id,
+                target_url,
+                status_code,
+                int(ok),
+                error_message,
+                error_category,
+                decision_state,
+                ignore_rule_id,
+                decision_reason,
+            ),
         )
         self._connection.commit()
+        return int(cursor.lastrowid)
+
+    def add_link_check_screenshot(
+        self,
+        *,
+        link_check_result_id: int | None,
+        crawl_run_id: int,
+        target_url: str,
+        status_code: int | None,
+        error_message: str | None,
+        artifact_file: str,
+    ) -> int:
+        cursor = self._connection.execute(
+            """
+            INSERT INTO link_check_screenshots(
+                link_check_result_id,
+                crawl_run_id,
+                target_url,
+                status_code,
+                error_message,
+                artifact_file
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (link_check_result_id, crawl_run_id, target_url, status_code, error_message, artifact_file),
+        )
+        self._connection.commit()
+        return int(cursor.lastrowid)
+
+    def list_latest_screenshots_by_result_ids(self, result_ids: list[int]) -> dict[int, LinkCheckScreenshotRecord]:
+        if not result_ids:
+            return {}
+        placeholders = ", ".join(["?"] * len(result_ids))
+        rows = self._connection.execute(
+            f"""
+            SELECT
+                s.id,
+                s.link_check_result_id,
+                s.crawl_run_id,
+                s.target_url,
+                s.status_code,
+                s.error_message,
+                s.artifact_file,
+                s.created_at
+            FROM link_check_screenshots s
+            JOIN (
+                SELECT link_check_result_id, MAX(id) AS max_id
+                FROM link_check_screenshots
+                WHERE link_check_result_id IN ({placeholders})
+                GROUP BY link_check_result_id
+            ) latest ON latest.max_id = s.id
+            """,
+            tuple(result_ids),
+        ).fetchall()
+        mapped: dict[int, LinkCheckScreenshotRecord] = {}
+        for row in rows:
+            result_id = int(row["link_check_result_id"])
+            mapped[result_id] = LinkCheckScreenshotRecord(
+                screenshot_id=int(row["id"]),
+                link_check_result_id=result_id,
+                crawl_run_id=int(row["crawl_run_id"]),
+                target_url=str(row["target_url"]),
+                status_code=int(row["status_code"]) if row["status_code"] is not None else None,
+                error_message=str(row["error_message"]) if row["error_message"] is not None else None,
+                artifact_file=str(row["artifact_file"]),
+                created_at=str(row["created_at"]),
+            )
+        return mapped
 
     def list_latest_link_check_results(
         self,
@@ -327,7 +555,11 @@ class CrawlRepository:
                 l.status_code,
                 l.ok,
                 l.error_message,
-                l.checked_at
+                l.checked_at,
+                l.error_category,
+                l.decision_state,
+                l.ignore_rule_id,
+                l.decision_reason
             FROM link_check_results l
             JOIN (
                 SELECT target_url, MAX(id) AS max_id
@@ -353,17 +585,24 @@ class CrawlRepository:
                 ok=bool(row["ok"]),
                 error_message=str(row["error_message"]) if row["error_message"] is not None else None,
                 checked_at=str(row["checked_at"]),
+                error_category=str(row["error_category"]) if row["error_category"] is not None else None,
+                decision_state=str(row["decision_state"]) if row["decision_state"] is not None else None,
+                ignore_rule_id=int(row["ignore_rule_id"]) if row["ignore_rule_id"] is not None else None,
+                decision_reason=str(row["decision_reason"]) if row["decision_reason"] is not None else None,
             )
             for row in rows
         ]
 
-    def list_source_pages_for_targets(self, run_id: int, target_urls: list[str]) -> dict[str, list[str]]:
+    def list_source_page_refs_for_targets(self, run_id: int, target_urls: list[str]) -> dict[str, list[ExternalLinkSourceRefRecord]]:
         if not target_urls:
             return {}
         placeholders = ", ".join(["?"] * len(target_urls))
         rows = self._connection.execute(
             f"""
-            SELECT el.target_url AS target_url, p.url AS source_page_url
+            SELECT
+                el.target_url AS target_url,
+                p.url AS source_page_url,
+                rpe.anchor_text AS anchor_text
             FROM run_page_external_links rpe
             JOIN pages p ON p.id = rpe.page_id
             JOIN external_links el ON el.id = rpe.external_link_id
@@ -372,10 +611,19 @@ class CrawlRepository:
             """,
             (run_id, *target_urls),
         ).fetchall()
-        mapped: dict[str, list[str]] = defaultdict(list)
+        mapped: dict[str, list[ExternalLinkSourceRefRecord]] = defaultdict(list)
         for row in rows:
-            mapped[str(row["target_url"])].append(str(row["source_page_url"]))
+            mapped[str(row["target_url"])].append(
+                ExternalLinkSourceRefRecord(
+                    source_page_url=str(row["source_page_url"]),
+                    anchor_text=str(row["anchor_text"]) if row["anchor_text"] is not None else None,
+                )
+            )
         return dict(mapped)
+
+    def list_source_pages_for_targets(self, run_id: int, target_urls: list[str]) -> dict[str, list[str]]:
+        refs = self.list_source_page_refs_for_targets(run_id, target_urls)
+        return {target: [ref.source_page_url for ref in records] for target, records in refs.items()}
 
     def get_run_started_finished(self, run_id: int) -> tuple[str | None, str | None]:
         row = self._connection.execute(
@@ -387,6 +635,730 @@ class CrawlRepository:
         started_at = str(row["started_at"]) if row["started_at"] is not None else None
         finished_at = str(row["finished_at"]) if row["finished_at"] is not None else None
         return started_at, finished_at
+
+    def add_link_ignore_rule(
+        self,
+        *,
+        job_id: str,
+        match_type: str,
+        pattern: str,
+        reason: str | None = None,
+        expires_at: str | None = None,
+        created_by: str | None = None,
+        source: str = "cli",
+    ) -> int:
+        cursor = self._connection.execute(
+            """
+            INSERT INTO link_ignore_rules(job_id, match_type, pattern, reason, expires_at, created_by, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (job_id, match_type, pattern, reason, expires_at, created_by, source),
+        )
+        self._connection.commit()
+        return int(cursor.lastrowid)
+
+    def deactivate_link_ignore_rule(self, *, job_id: str, rule_id: int) -> bool:
+        cursor = self._connection.execute(
+            """
+            UPDATE link_ignore_rules
+            SET active = 0
+            WHERE id = ? AND job_id = ? AND active = 1
+            """,
+            (rule_id, job_id),
+        )
+        self._connection.commit()
+        return int(cursor.rowcount) > 0
+
+    def list_link_ignore_rules(
+        self,
+        *,
+        job_id: str,
+        active_only: bool = False,
+        search: str | None = None,
+        limit: int = 200,
+    ) -> list[LinkIgnoreRuleRecord]:
+        query = """
+            SELECT id, job_id, match_type, pattern, reason, active, created_at, expires_at, created_by, source
+            FROM link_ignore_rules
+            WHERE job_id = ?
+        """
+        params: list[object] = [job_id]
+        if active_only:
+            query += " AND active = 1"
+        if search:
+            query += " AND LOWER(pattern) LIKE ?"
+            params.append(f"%{search.lower()}%")
+        query += " ORDER BY active DESC, created_at DESC, id DESC LIMIT ?"
+        params.append(limit)
+        rows = self._connection.execute(query, tuple(params)).fetchall()
+        return [self._row_to_ignore_rule(row) for row in rows]
+
+    def list_ignore_rule_impacts(
+        self,
+        *,
+        job_id: str,
+        run_id: int,
+        active_only: bool = True,
+        rule_id: int | None = None,
+        limit: int = 2000,
+        now: datetime | None = None,
+    ) -> list[IgnoreRuleImpactRecord]:
+        now_str = (now or datetime.now(tz=UTC)).isoformat()
+        query = """
+            SELECT
+                r.id AS rule_id,
+                r.job_id AS job_id,
+                r.match_type AS match_type,
+                r.pattern AS pattern,
+                r.reason AS reason,
+                r.active AS active,
+                r.expires_at AS expires_at,
+                el.target_url AS target_url,
+                p.url AS source_page_url,
+                rpe.anchor_text AS anchor_text
+            FROM link_ignore_rules r
+            JOIN run_external_links rel ON rel.run_id = ?
+            JOIN external_links el ON el.id = rel.external_link_id
+            LEFT JOIN run_page_external_links rpe
+                ON rpe.run_id = rel.run_id
+               AND rpe.external_link_id = rel.external_link_id
+            LEFT JOIN pages p ON p.id = rpe.page_id
+            WHERE r.job_id = ?
+              AND (r.expires_at IS NULL OR r.expires_at > ?)
+              AND (
+                (r.match_type = 'exact' AND LOWER(r.pattern) = LOWER(el.target_url))
+                OR
+                (r.match_type = 'contains' AND INSTR(LOWER(el.target_url), LOWER(r.pattern)) > 0)
+              )
+        """
+        params: list[object] = [run_id, job_id, now_str]
+        if active_only:
+            query += " AND r.active = 1"
+        if rule_id is not None:
+            query += " AND r.id = ?"
+            params.append(rule_id)
+        query += """
+            ORDER BY
+                r.id ASC,
+                el.target_url ASC,
+                p.url ASC
+            LIMIT ?
+        """
+        params.append(limit)
+        rows = self._connection.execute(query, tuple(params)).fetchall()
+        return [
+            IgnoreRuleImpactRecord(
+                rule_id=int(row["rule_id"]),
+                job_id=str(row["job_id"]),
+                match_type=str(row["match_type"]),
+                pattern=str(row["pattern"]),
+                reason=str(row["reason"]) if row["reason"] is not None else None,
+                active=bool(row["active"]),
+                expires_at=str(row["expires_at"]) if row["expires_at"] is not None else None,
+                target_url=str(row["target_url"]),
+                source_page_url=str(row["source_page_url"]) if row["source_page_url"] is not None else None,
+                anchor_text=str(row["anchor_text"]) if row["anchor_text"] is not None else None,
+            )
+            for row in rows
+        ]
+
+    def find_matching_link_ignore_rule(
+        self,
+        *,
+        job_id: str,
+        target_url: str,
+        now: datetime | None = None,
+    ) -> LinkIgnoreRuleRecord | None:
+        now_str = (now or datetime.now(tz=UTC)).isoformat()
+        row = self._connection.execute(
+            """
+            SELECT id, job_id, match_type, pattern, reason, active, created_at, expires_at, created_by, source
+            FROM link_ignore_rules
+            WHERE job_id = ?
+              AND active = 1
+              AND (expires_at IS NULL OR expires_at > ?)
+              AND (
+                (match_type = 'exact' AND LOWER(pattern) = LOWER(?))
+                OR
+                (match_type = 'contains' AND INSTR(LOWER(?), LOWER(pattern)) > 0)
+              )
+            ORDER BY
+              CASE WHEN match_type = 'exact' THEN 0 ELSE 1 END ASC,
+              LENGTH(pattern) DESC,
+              id ASC
+            LIMIT 1
+            """,
+            (job_id, now_str, target_url, target_url),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_ignore_rule(row)
+
+    def record_link_failure_state(
+        self,
+        *,
+        job_id: str,
+        target_url: str,
+        error_category: str,
+        status_code: int | None,
+        error_message: str | None,
+        failed_at: datetime | None = None,
+    ) -> LinkFailureStateRecord:
+        failed_at_str = (failed_at or datetime.now(tz=UTC)).isoformat()
+        self._connection.execute(
+            """
+            INSERT INTO link_failure_state(
+                job_id,
+                target_url,
+                error_category,
+                first_failed_at,
+                last_failed_at,
+                consecutive_failures,
+                last_status_code,
+                last_error_message,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
+            ON CONFLICT(job_id, target_url, error_category) DO UPDATE SET
+                last_failed_at = excluded.last_failed_at,
+                consecutive_failures = link_failure_state.consecutive_failures + 1,
+                last_status_code = excluded.last_status_code,
+                last_error_message = excluded.last_error_message,
+                updated_at = excluded.updated_at
+            """,
+            (
+                job_id,
+                target_url,
+                error_category,
+                failed_at_str,
+                failed_at_str,
+                status_code,
+                error_message,
+                failed_at_str,
+            ),
+        )
+        row = self._connection.execute(
+            """
+            SELECT
+                job_id,
+                target_url,
+                error_category,
+                first_failed_at,
+                last_failed_at,
+                consecutive_failures,
+                last_status_code,
+                last_error_message,
+                last_ok_at,
+                updated_at
+            FROM link_failure_state
+            WHERE job_id = ? AND target_url = ? AND error_category = ?
+            """,
+            (job_id, target_url, error_category),
+        ).fetchone()
+        self._connection.commit()
+        if row is None:
+            raise RuntimeError("link_failure_state row missing after upsert")
+        return self._row_to_link_failure_state(row)
+
+    def clear_link_failure_state(
+        self,
+        *,
+        job_id: str,
+        target_url: str,
+        error_category: str | None = None,
+    ) -> int:
+        if error_category is None:
+            cursor = self._connection.execute(
+                "DELETE FROM link_failure_state WHERE job_id = ? AND target_url = ?",
+                (job_id, target_url),
+            )
+        else:
+            cursor = self._connection.execute(
+                "DELETE FROM link_failure_state WHERE job_id = ? AND target_url = ? AND error_category = ?",
+                (job_id, target_url, error_category),
+            )
+        self._connection.commit()
+        return int(cursor.rowcount)
+
+    def get_link_failure_state(
+        self,
+        *,
+        job_id: str,
+        target_url: str,
+        error_category: str,
+    ) -> LinkFailureStateRecord | None:
+        row = self._connection.execute(
+            """
+            SELECT
+                job_id,
+                target_url,
+                error_category,
+                first_failed_at,
+                last_failed_at,
+                consecutive_failures,
+                last_status_code,
+                last_error_message,
+                last_ok_at,
+                updated_at
+            FROM link_failure_state
+            WHERE job_id = ? AND target_url = ? AND error_category = ?
+            """,
+            (job_id, target_url, error_category),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_link_failure_state(row)
+
+    _LINK_ALERT_SELECT = """
+                id,
+                job_id,
+                target_url,
+                state,
+                first_reported_at,
+                last_reported_at,
+                last_reported_run_id,
+                last_seen_checked_at,
+                last_status_code,
+                last_error_message,
+                reminder_sent_count,
+                hold_until,
+                resolved_at,
+                slack_destination_id,
+                slack_channel_id,
+                slack_root_ts,
+                slack_thread_ts,
+                slack_bootstrap_ts,
+                human_bucket,
+                owner_actor_id,
+                ignore_until
+    """
+
+    def list_open_link_alerts(self, *, job_id: str) -> list[LinkAlertRecord]:
+        rows = self._connection.execute(
+            f"""
+            SELECT
+                {self._LINK_ALERT_SELECT.strip()}
+            FROM link_alerts
+            WHERE job_id = ? AND state = 'open'
+            ORDER BY first_reported_at ASC, id ASC
+            """,
+            (job_id,),
+        ).fetchall()
+        return [self._row_to_link_alert(row) for row in rows]
+
+    def upsert_open_link_alert(
+        self,
+        *,
+        job_id: str,
+        target_url: str,
+        run_id: int,
+        checked_at: str,
+        status_code: int | None,
+        error_message: str | None,
+    ) -> LinkAlertRecord:
+        self._connection.execute(
+            """
+            INSERT INTO link_alerts(
+                job_id,
+                target_url,
+                state,
+                first_reported_at,
+                last_reported_at,
+                last_reported_run_id,
+                last_seen_checked_at,
+                last_status_code,
+                last_error_message
+            ) VALUES (?, ?, 'open', ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(job_id, target_url) DO UPDATE SET
+                state = 'open',
+                last_reported_at = excluded.last_reported_at,
+                last_reported_run_id = excluded.last_reported_run_id,
+                last_seen_checked_at = excluded.last_seen_checked_at,
+                last_status_code = excluded.last_status_code,
+                last_error_message = excluded.last_error_message,
+                resolved_at = NULL
+            """,
+            (job_id, target_url, checked_at, checked_at, run_id, checked_at, status_code, error_message),
+        )
+        row = self._connection.execute(
+            f"""
+            SELECT
+                {self._LINK_ALERT_SELECT.strip()}
+            FROM link_alerts
+            WHERE job_id = ? AND target_url = ?
+            LIMIT 1
+            """,
+            (job_id, target_url),
+        ).fetchone()
+        self._connection.commit()
+        if row is None:
+            raise RuntimeError("link_alert row missing after upsert")
+        return self._row_to_link_alert(row)
+
+    def get_open_link_alert_by_id(self, *, alert_id: int) -> LinkAlertRecord | None:
+        row = self._connection.execute(
+            f"""
+            SELECT
+                {self._LINK_ALERT_SELECT.strip()}
+            FROM link_alerts
+            WHERE id = ? AND state = 'open'
+            LIMIT 1
+            """,
+            (alert_id,),
+        ).fetchone()
+        return self._row_to_link_alert(row) if row is not None else None
+
+    def get_open_link_alert_by_slack_message(
+        self,
+        *,
+        job_id: str,
+        slack_channel_id: str,
+        message_ts: str,
+    ) -> LinkAlertRecord | None:
+        row = self._connection.execute(
+            f"""
+            SELECT
+                {self._LINK_ALERT_SELECT.strip()}
+            FROM link_alerts
+            WHERE job_id = ?
+              AND state = 'open'
+              AND slack_channel_id = ?
+              AND (slack_root_ts = ? OR slack_bootstrap_ts = ?)
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (job_id, slack_channel_id, message_ts, message_ts),
+        ).fetchone()
+        return self._row_to_link_alert(row) if row is not None else None
+
+    def get_open_link_alert_by_target(self, *, job_id: str, target_url: str) -> LinkAlertRecord | None:
+        row = self._connection.execute(
+            f"""
+            SELECT
+                {self._LINK_ALERT_SELECT.strip()}
+            FROM link_alerts
+            WHERE job_id = ? AND target_url = ? AND state = 'open'
+            LIMIT 1
+            """,
+            (job_id, target_url),
+        ).fetchone()
+        return self._row_to_link_alert(row) if row is not None else None
+
+    def update_link_alert_slack_refs(
+        self,
+        *,
+        alert_id: int,
+        slack_destination_id: str | None,
+        slack_channel_id: str | None,
+        slack_root_ts: str | None,
+        slack_thread_ts: str | None = None,
+        slack_bootstrap_ts: str | None = None,
+    ) -> None:
+        thread_ts = slack_thread_ts if slack_thread_ts is not None else slack_root_ts
+        self._connection.execute(
+            """
+            UPDATE link_alerts
+            SET
+                slack_destination_id = COALESCE(?, slack_destination_id),
+                slack_channel_id = COALESCE(?, slack_channel_id),
+                slack_root_ts = COALESCE(?, slack_root_ts),
+                slack_thread_ts = COALESCE(?, slack_thread_ts),
+                slack_bootstrap_ts = COALESCE(?, slack_bootstrap_ts)
+            WHERE id = ?
+            """,
+            (
+                slack_destination_id,
+                slack_channel_id,
+                slack_root_ts,
+                thread_ts,
+                slack_bootstrap_ts,
+                alert_id,
+            ),
+        )
+        self._connection.commit()
+
+    def append_link_alert_event(
+        self,
+        *,
+        alert_id: int,
+        event_type: str,
+        actor_id: str | None = None,
+        payload: dict[str, object] | None = None,
+    ) -> int:
+        payload_json = json.dumps(payload, sort_keys=True) if payload is not None else None
+        cursor = self._connection.execute(
+            """
+            INSERT INTO link_alert_events(alert_id, event_type, actor_id, payload_json)
+            VALUES (?, ?, ?, ?)
+            """,
+            (alert_id, event_type, actor_id, payload_json),
+        )
+        self._connection.commit()
+        return int(cursor.lastrowid)
+
+    def enqueue_link_retest(
+        self,
+        *,
+        job_id: str,
+        alert_id: int | None,
+        target_url: str,
+        slack_destination_id: str | None,
+        slack_channel_id: str,
+        slack_thread_ts: str,
+        requested_by: str | None,
+    ) -> int:
+        cursor = self._connection.execute(
+            """
+            INSERT INTO link_retest_queue(
+                job_id,
+                alert_id,
+                target_url,
+                slack_destination_id,
+                slack_channel_id,
+                slack_thread_ts,
+                requested_by,
+                status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')
+            """,
+            (job_id, alert_id, target_url, slack_destination_id, slack_channel_id, slack_thread_ts, requested_by),
+        )
+        self._connection.commit()
+        return int(cursor.lastrowid)
+
+    def list_pending_link_retests(self, *, job_id: str, limit: int = 20) -> list[LinkRetestQueueRecord]:
+        rows = self._connection.execute(
+            """
+            SELECT
+                id,
+                job_id,
+                alert_id,
+                target_url,
+                slack_destination_id,
+                slack_channel_id,
+                slack_thread_ts,
+                requested_by,
+                status,
+                result_ok,
+                result_status_code,
+                result_error_message,
+                created_at,
+                processed_at
+            FROM link_retest_queue
+            WHERE job_id = ? AND status = 'pending'
+            ORDER BY created_at ASC, id ASC
+            LIMIT ?
+            """,
+            (job_id, limit),
+        ).fetchall()
+        return [self._row_to_link_retest(row) for row in rows]
+
+    def complete_link_retest(
+        self,
+        *,
+        retest_id: int,
+        result_ok: bool,
+        status_code: int | None,
+        error_message: str | None,
+        processed_at: str,
+    ) -> None:
+        self._connection.execute(
+            """
+            UPDATE link_retest_queue
+            SET
+                status = 'done',
+                result_ok = ?,
+                result_status_code = ?,
+                result_error_message = ?,
+                processed_at = ?
+            WHERE id = ?
+            """,
+            (
+                1 if result_ok else 0,
+                status_code,
+                error_message,
+                processed_at,
+                retest_id,
+            ),
+        )
+        self._connection.commit()
+
+    def update_link_alert_lifecycle_fields(
+        self,
+        *,
+        alert_id: int,
+        human_bucket: str | None = None,
+        owner_actor_id: str | None = None,
+        clear_owner: bool = False,
+        hold_until: str | None = None,
+        clear_hold: bool = False,
+        ignore_until: str | None = None,
+        clear_ignore: bool = False,
+    ) -> None:
+        sets: list[str] = []
+        params: list[object] = []
+        if human_bucket is not None:
+            sets.append("human_bucket = ?")
+            params.append(human_bucket)
+        if clear_owner:
+            sets.append("owner_actor_id = NULL")
+        elif owner_actor_id is not None:
+            sets.append("owner_actor_id = ?")
+            params.append(owner_actor_id)
+        if clear_hold:
+            sets.append("hold_until = NULL")
+        elif hold_until is not None:
+            sets.append("hold_until = ?")
+            params.append(hold_until)
+        if clear_ignore:
+            sets.append("ignore_until = NULL")
+        elif ignore_until is not None:
+            sets.append("ignore_until = ?")
+            params.append(ignore_until)
+        if not sets:
+            return
+        params.append(alert_id)
+        self._connection.execute(
+            f"UPDATE link_alerts SET {', '.join(sets)} WHERE id = ?",
+            params,
+        )
+        self._connection.commit()
+
+    def resolve_open_link_alert_by_id(self, *, alert_id: int, resolved_at: str) -> bool:
+        cursor = self._connection.execute(
+            """
+            UPDATE link_alerts
+            SET
+                state = 'resolved',
+                resolved_at = ?,
+                human_bucket = NULL,
+                owner_actor_id = NULL,
+                hold_until = NULL,
+                ignore_until = NULL
+            WHERE id = ? AND state = 'open'
+            """,
+            (resolved_at, alert_id),
+        )
+        self._connection.commit()
+        return int(cursor.rowcount) > 0
+
+    def expire_link_alert_human_buckets(self, *, job_id: str, now_iso: str) -> int:
+        """Clear timed ignore when past ignore_until; leave infinite (NULL) ignores untouched."""
+        cursor = self._connection.execute(
+            """
+            UPDATE link_alerts
+            SET human_bucket = NULL, ignore_until = NULL
+            WHERE job_id = ?
+              AND state = 'open'
+              AND human_bucket = 'ignored'
+              AND ignore_until IS NOT NULL
+              AND ignore_until <= ?
+            """,
+            (job_id, now_iso),
+        )
+        self._connection.commit()
+        return int(cursor.rowcount)
+
+    def increment_link_alert_reminder_count(self, *, job_id: str, target_url: str) -> None:
+        self._connection.execute(
+            """
+            UPDATE link_alerts
+            SET reminder_sent_count = reminder_sent_count + 1
+            WHERE job_id = ? AND target_url = ? AND state = 'open'
+            """,
+            (job_id, target_url),
+        )
+        self._connection.commit()
+
+    def resolve_link_alerts_not_in_targets(self, *, job_id: str, active_targets: set[str], resolved_at: str) -> int:
+        open_rows = self._connection.execute(
+            "SELECT target_url FROM link_alerts WHERE job_id = ? AND state = 'open'",
+            (job_id,),
+        ).fetchall()
+        to_resolve = [str(row["target_url"]) for row in open_rows if str(row["target_url"]) not in active_targets]
+        if not to_resolve:
+            return 0
+        placeholders = ", ".join(["?"] * len(to_resolve))
+        cursor = self._connection.execute(
+            f"""
+            UPDATE link_alerts
+            SET state = 'resolved', resolved_at = ?
+            WHERE job_id = ? AND state = 'open' AND target_url IN ({placeholders})
+            """,
+            (resolved_at, job_id, *to_resolve),
+        )
+        self._connection.commit()
+        return int(cursor.rowcount)
+
+    def _row_to_ignore_rule(self, row: sqlite3.Row) -> LinkIgnoreRuleRecord:
+        return LinkIgnoreRuleRecord(
+            rule_id=int(row["id"]),
+            job_id=str(row["job_id"]),
+            match_type=str(row["match_type"]),
+            pattern=str(row["pattern"]),
+            reason=str(row["reason"]) if row["reason"] is not None else None,
+            active=bool(row["active"]),
+            created_at=str(row["created_at"]),
+            expires_at=str(row["expires_at"]) if row["expires_at"] is not None else None,
+            created_by=str(row["created_by"]) if row["created_by"] is not None else None,
+            source=str(row["source"]) if row["source"] is not None else "cli",
+        )
+
+    def _row_to_link_failure_state(self, row: sqlite3.Row) -> LinkFailureStateRecord:
+        return LinkFailureStateRecord(
+            job_id=str(row["job_id"]),
+            target_url=str(row["target_url"]),
+            error_category=str(row["error_category"]),
+            first_failed_at=str(row["first_failed_at"]),
+            last_failed_at=str(row["last_failed_at"]),
+            consecutive_failures=int(row["consecutive_failures"]),
+            last_status_code=int(row["last_status_code"]) if row["last_status_code"] is not None else None,
+            last_error_message=str(row["last_error_message"]) if row["last_error_message"] is not None else None,
+            last_ok_at=str(row["last_ok_at"]) if row["last_ok_at"] is not None else None,
+            updated_at=str(row["updated_at"]),
+        )
+
+    def _row_to_link_alert(self, row: sqlite3.Row) -> LinkAlertRecord:
+        return LinkAlertRecord(
+            alert_id=int(row["id"]),
+            job_id=str(row["job_id"]),
+            target_url=str(row["target_url"]),
+            state=str(row["state"]),
+            first_reported_at=str(row["first_reported_at"]),
+            last_reported_at=str(row["last_reported_at"]) if row["last_reported_at"] is not None else None,
+            last_reported_run_id=int(row["last_reported_run_id"]) if row["last_reported_run_id"] is not None else None,
+            last_seen_checked_at=str(row["last_seen_checked_at"]) if row["last_seen_checked_at"] is not None else None,
+            last_status_code=int(row["last_status_code"]) if row["last_status_code"] is not None else None,
+            last_error_message=str(row["last_error_message"]) if row["last_error_message"] is not None else None,
+            reminder_sent_count=int(row["reminder_sent_count"]),
+            hold_until=str(row["hold_until"]) if row["hold_until"] is not None else None,
+            resolved_at=str(row["resolved_at"]) if row["resolved_at"] is not None else None,
+            slack_destination_id=str(row["slack_destination_id"]) if row["slack_destination_id"] is not None else None,
+            slack_channel_id=str(row["slack_channel_id"]) if row["slack_channel_id"] is not None else None,
+            slack_root_ts=str(row["slack_root_ts"]) if row["slack_root_ts"] is not None else None,
+            slack_thread_ts=str(row["slack_thread_ts"]) if row["slack_thread_ts"] is not None else None,
+            slack_bootstrap_ts=str(row["slack_bootstrap_ts"]) if row["slack_bootstrap_ts"] is not None else None,
+            human_bucket=str(row["human_bucket"]) if row["human_bucket"] is not None else None,
+            owner_actor_id=str(row["owner_actor_id"]) if row["owner_actor_id"] is not None else None,
+            ignore_until=str(row["ignore_until"]) if row["ignore_until"] is not None else None,
+        )
+
+    def _row_to_link_retest(self, row: sqlite3.Row) -> LinkRetestQueueRecord:
+        rok = row["result_ok"]
+        return LinkRetestQueueRecord(
+            retest_id=int(row["id"]),
+            job_id=str(row["job_id"]),
+            alert_id=int(row["alert_id"]) if row["alert_id"] is not None else None,
+            target_url=str(row["target_url"]),
+            slack_destination_id=str(row["slack_destination_id"]) if row["slack_destination_id"] is not None else None,
+            slack_channel_id=str(row["slack_channel_id"]),
+            slack_thread_ts=str(row["slack_thread_ts"]),
+            requested_by=str(row["requested_by"]) if row["requested_by"] is not None else None,
+            status=str(row["status"]),
+            result_ok=bool(rok) if rok is not None else None,
+            result_status_code=int(row["result_status_code"]) if row["result_status_code"] is not None else None,
+            result_error_message=str(row["result_error_message"]) if row["result_error_message"] is not None else None,
+            created_at=str(row["created_at"]),
+            processed_at=str(row["processed_at"]) if row["processed_at"] is not None else None,
+        )
 
     def _upsert_page(self, url: str, run_id: int) -> int:
         row = self._connection.execute("SELECT id FROM pages WHERE url = ?", (url,)).fetchone()
@@ -523,6 +1495,73 @@ class CrawlRepository:
                 )
             )
         return out
+
+    def list_pages_with_text(
+        self,
+        run_id: int,
+        *,
+        search: str | None = None,
+        limit: int = 100,
+    ) -> list[PageTextRecord]:
+        query = """
+            SELECT
+                rp.run_id AS run_id,
+                p.url AS url,
+                rp.created_at AS created_at,
+                LENGTH(rp.main_text) AS text_len,
+                rp.main_text AS main_text
+            FROM run_pages rp
+            JOIN pages p ON p.id = rp.page_id
+            WHERE rp.run_id = ?
+              AND rp.main_text IS NOT NULL
+              AND TRIM(rp.main_text) != ''
+        """
+        params: list[object] = [run_id]
+        if search:
+            query += " AND p.url LIKE ?"
+            params.append(f"%{search}%")
+        query += " ORDER BY rp.created_at DESC, p.url ASC LIMIT ?"
+        params.append(limit)
+        rows = self._connection.execute(query, tuple(params)).fetchall()
+        return [
+            PageTextRecord(
+                run_id=int(row["run_id"]),
+                url=str(row["url"]),
+                created_at=str(row["created_at"]),
+                text_len=int(row["text_len"]) if row["text_len"] is not None else 0,
+                main_text=str(row["main_text"]),
+            )
+            for row in rows
+        ]
+
+    def get_page_text(self, run_id: int, url: str) -> PageTextRecord | None:
+        row = self._connection.execute(
+            """
+            SELECT
+                rp.run_id AS run_id,
+                p.url AS url,
+                rp.created_at AS created_at,
+                LENGTH(rp.main_text) AS text_len,
+                rp.main_text AS main_text
+            FROM run_pages rp
+            JOIN pages p ON p.id = rp.page_id
+            WHERE rp.run_id = ?
+              AND p.url = ?
+              AND rp.main_text IS NOT NULL
+              AND TRIM(rp.main_text) != ''
+            LIMIT 1
+            """,
+            (run_id, url),
+        ).fetchone()
+        if row is None:
+            return None
+        return PageTextRecord(
+            run_id=int(row["run_id"]),
+            url=str(row["url"]),
+            created_at=str(row["created_at"]),
+            text_len=int(row["text_len"]) if row["text_len"] is not None else 0,
+            main_text=str(row["main_text"]),
+        )
 
     def compute_page_text_metrics(
         self,
@@ -745,6 +1784,10 @@ class CrawlRepository:
             "run_external_links_appeared",
             "run_external_links_disappeared",
             "run_page_external_links",
+            "link_ignore_rules",
+            "link_failure_state",
+            "link_alerts",
+            "link_check_screenshots",
         )
         counts: dict[str, int] = {}
         for table in tables:

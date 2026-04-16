@@ -166,3 +166,56 @@ def test_compute_run_diffs_for_pages_and_external_links(tmp_path) -> None:
     assert {row.target_url for row in disappeared_links} == {"https://ext-1.example"}
 
     connection.close()
+
+
+def test_link_alert_slack_refs_events_and_retest_queue(tmp_path) -> None:
+    connection = connect_sqlite(tmp_path / "crawl.db")
+    initialize_schema(connection)
+    repo = CrawlRepository(connection)
+    run_id = repo.create_run("job-lc")
+    alert = repo.upsert_open_link_alert(
+        job_id="job-lc",
+        target_url="https://broken.example",
+        run_id=run_id,
+        checked_at="2026-04-16T10:00:00+00:00",
+        status_code=404,
+        error_message="missing",
+    )
+    repo.update_link_alert_slack_refs(
+        alert_id=alert.alert_id,
+        slack_destination_id="slack-primary",
+        slack_channel_id="C123",
+        slack_root_ts="111.222",
+        slack_thread_ts="111.222",
+        slack_bootstrap_ts="111.333",
+    )
+    found = repo.get_open_link_alert_by_slack_message(
+        job_id="job-lc",
+        slack_channel_id="C123",
+        message_ts="111.222",
+    )
+    assert found is not None
+    assert found.slack_root_ts == "111.222"
+    repo.append_link_alert_event(alert_id=alert.alert_id, event_type="unit", actor_id="U1", payload={"k": 1})
+    rid = repo.enqueue_link_retest(
+        job_id="job-lc",
+        alert_id=alert.alert_id,
+        target_url="https://broken.example",
+        slack_destination_id="slack-primary",
+        slack_channel_id="C123",
+        slack_thread_ts="111.222",
+        requested_by="U9",
+    )
+    pending = repo.list_pending_link_retests(job_id="job-lc", limit=5)
+    assert len(pending) == 1
+    assert pending[0].retest_id == rid
+    repo.complete_link_retest(
+        retest_id=rid,
+        result_ok=True,
+        status_code=200,
+        error_message=None,
+        processed_at="2026-04-16T11:00:00+00:00",
+    )
+    pending2 = repo.list_pending_link_retests(job_id="job-lc", limit=5)
+    assert pending2 == []
+    connection.close()

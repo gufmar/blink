@@ -41,3 +41,29 @@ def test_invalid_property_fails_validation(tmp_path: Path) -> None:
 
     assert issues
     assert any("Additional properties are not allowed" in issue.message for issue in issues)
+
+
+def test_legacy_slack_block_fails_validation(tmp_path: Path) -> None:
+    job_data = json.loads(Path("jobs/cardano.org.job.json").read_text(encoding="utf-8"))
+    notifications = job_data.pop("notifications")
+    assert notifications is not None
+    job_data["slack"] = {
+        "enabled": True,
+        "channel_id": "C123",
+        "webhook_env": "BLINK_SLACK_WEBHOOK_URL",
+        "bot_token_env": "BLINK_SLACK_BOT_TOKEN",
+        "emoji_actions": {"ignore": "x", "claim": "eyes"},
+        "reminders": {"enabled": True, "days_after_first_alert": [3]},
+    }
+    job_path = tmp_path / "legacy-slack.job.json"
+    job_path.write_text(json.dumps(job_data), encoding="utf-8")
+
+    config = load_effective_job_config(job_path, cwd=Path.cwd())
+    issues = validate_job_config(config)
+
+    assert issues
+    assert any(
+        ("notifications" in issue.message and "required property" in issue.message)
+        or issue.path == "$"
+        for issue in issues
+    )

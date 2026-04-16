@@ -24,7 +24,7 @@ def configure_logging(
     logger.add(
         lambda message: console.print(message, end=""),
         level=console_level,
-        colorize=True,
+        colorize=False,
         format=(
             "<green>{time:HH:mm:ss}</green> "
             "<level>{level:<8}</level> "

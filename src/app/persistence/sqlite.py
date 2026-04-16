@@ -68,13 +68,135 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
             status_code INTEGER,
             ok INTEGER NOT NULL,
             error_message TEXT,
+            error_category TEXT,
+            decision_state TEXT,
+            ignore_rule_id INTEGER,
+            decision_reason TEXT,
             checked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (crawl_link_id) REFERENCES crawl_links(id) ON DELETE CASCADE,
-            FOREIGN KEY (crawl_run_id) REFERENCES crawl_runs(id) ON DELETE CASCADE
+            FOREIGN KEY (crawl_run_id) REFERENCES crawl_runs(id) ON DELETE CASCADE,
+            FOREIGN KEY (ignore_rule_id) REFERENCES link_ignore_rules(id) ON DELETE SET NULL
         );
 
         CREATE INDEX IF NOT EXISTS idx_link_check_results_run_url
             ON link_check_results(crawl_run_id, target_url, checked_at DESC, id DESC);
+
+        CREATE TABLE IF NOT EXISTS link_check_screenshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            link_check_result_id INTEGER,
+            crawl_run_id INTEGER NOT NULL,
+            target_url TEXT NOT NULL,
+            status_code INTEGER,
+            error_message TEXT,
+            artifact_file TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (link_check_result_id) REFERENCES link_check_results(id) ON DELETE SET NULL,
+            FOREIGN KEY (crawl_run_id) REFERENCES crawl_runs(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_link_check_screenshots_result
+            ON link_check_screenshots(link_check_result_id);
+
+        CREATE INDEX IF NOT EXISTS idx_link_check_screenshots_run_target
+            ON link_check_screenshots(crawl_run_id, target_url, created_at DESC, id DESC);
+
+        CREATE TABLE IF NOT EXISTS link_ignore_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL,
+            match_type TEXT NOT NULL,
+            pattern TEXT NOT NULL,
+            reason TEXT,
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            expires_at TEXT,
+            created_by TEXT,
+            source TEXT NOT NULL DEFAULT 'cli'
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_link_ignore_rules_job_active
+            ON link_ignore_rules(job_id, active);
+
+        CREATE INDEX IF NOT EXISTS idx_link_ignore_rules_pattern
+            ON link_ignore_rules(pattern);
+
+        CREATE TABLE IF NOT EXISTS link_failure_state (
+            job_id TEXT NOT NULL,
+            target_url TEXT NOT NULL,
+            error_category TEXT NOT NULL,
+            first_failed_at TEXT NOT NULL,
+            last_failed_at TEXT NOT NULL,
+            consecutive_failures INTEGER NOT NULL DEFAULT 1,
+            last_status_code INTEGER,
+            last_error_message TEXT,
+            last_ok_at TEXT,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (job_id, target_url, error_category)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_link_failure_state_lookup
+            ON link_failure_state(job_id, target_url, error_category);
+
+        CREATE TABLE IF NOT EXISTS link_alerts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL,
+            target_url TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT 'open',
+            first_reported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_reported_at TEXT,
+            last_reported_run_id INTEGER,
+            last_seen_checked_at TEXT,
+            last_status_code INTEGER,
+            last_error_message TEXT,
+            reminder_sent_count INTEGER NOT NULL DEFAULT 0,
+            hold_until TEXT,
+            resolved_at TEXT,
+            slack_destination_id TEXT,
+            slack_channel_id TEXT,
+            slack_root_ts TEXT,
+            slack_thread_ts TEXT,
+            slack_bootstrap_ts TEXT,
+            human_bucket TEXT,
+            owner_actor_id TEXT,
+            ignore_until TEXT,
+            UNIQUE(job_id, target_url)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_link_alerts_open
+            ON link_alerts(job_id, state);
+
+        CREATE TABLE IF NOT EXISTS link_alert_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            alert_id INTEGER NOT NULL,
+            event_type TEXT NOT NULL,
+            actor_id TEXT,
+            payload_json TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (alert_id) REFERENCES link_alerts(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_link_alert_events_alert
+            ON link_alert_events(alert_id, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS link_retest_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL,
+            alert_id INTEGER,
+            target_url TEXT NOT NULL,
+            slack_destination_id TEXT,
+            slack_channel_id TEXT NOT NULL,
+            slack_thread_ts TEXT NOT NULL,
+            requested_by TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            result_ok INTEGER,
+            result_status_code INTEGER,
+            result_error_message TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            processed_at TEXT,
+            FOREIGN KEY (alert_id) REFERENCES link_alerts(id) ON DELETE SET NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_link_retest_queue_pending
+            ON link_retest_queue(job_id, status, created_at ASC);
 
         CREATE TABLE IF NOT EXISTS pages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -199,6 +321,10 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
         """
     )
     _ensure_run_pages_text_metric_columns(connection)
+    _ensure_link_check_result_decision_columns(connection)
+    _ensure_link_alerts_lifecycle_columns(connection)
+    _ensure_link_alert_events_table(connection)
+    _ensure_link_retest_queue_table(connection)
     connection.commit()
 
 
@@ -217,3 +343,90 @@ def _ensure_run_pages_text_metric_columns(connection: sqlite3.Connection) -> Non
         statements.append("ALTER TABLE run_pages ADD COLUMN text_significant_change INTEGER")
     for stmt in statements:
         connection.execute(stmt)
+
+
+def _ensure_link_check_result_decision_columns(connection: sqlite3.Connection) -> None:
+    """Add decision/ignore metadata columns to link_check_results (forward-only ALTER)."""
+    rows = connection.execute("PRAGMA table_info(link_check_results)").fetchall()
+    names = {str(r[1]) for r in rows}
+    statements: list[str] = []
+    if "error_category" not in names:
+        statements.append("ALTER TABLE link_check_results ADD COLUMN error_category TEXT")
+    if "decision_state" not in names:
+        statements.append("ALTER TABLE link_check_results ADD COLUMN decision_state TEXT")
+    if "ignore_rule_id" not in names:
+        statements.append("ALTER TABLE link_check_results ADD COLUMN ignore_rule_id INTEGER")
+    if "decision_reason" not in names:
+        statements.append("ALTER TABLE link_check_results ADD COLUMN decision_reason TEXT")
+    for stmt in statements:
+        connection.execute(stmt)
+
+
+def _ensure_link_alerts_lifecycle_columns(connection: sqlite3.Connection) -> None:
+    rows = connection.execute("PRAGMA table_info(link_alerts)").fetchall()
+    names = {str(r[1]) for r in rows}
+    mapping = {
+        "slack_destination_id": "ALTER TABLE link_alerts ADD COLUMN slack_destination_id TEXT",
+        "slack_channel_id": "ALTER TABLE link_alerts ADD COLUMN slack_channel_id TEXT",
+        "slack_root_ts": "ALTER TABLE link_alerts ADD COLUMN slack_root_ts TEXT",
+        "slack_thread_ts": "ALTER TABLE link_alerts ADD COLUMN slack_thread_ts TEXT",
+        "slack_bootstrap_ts": "ALTER TABLE link_alerts ADD COLUMN slack_bootstrap_ts TEXT",
+        "human_bucket": "ALTER TABLE link_alerts ADD COLUMN human_bucket TEXT",
+        "owner_actor_id": "ALTER TABLE link_alerts ADD COLUMN owner_actor_id TEXT",
+        "ignore_until": "ALTER TABLE link_alerts ADD COLUMN ignore_until TEXT",
+    }
+    for col, stmt in mapping.items():
+        if col not in names:
+            connection.execute(stmt)
+
+
+def _ensure_link_alert_events_table(connection: sqlite3.Connection) -> None:
+    row = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='link_alert_events'"
+    ).fetchone()
+    if row is None:
+        connection.executescript(
+            """
+            CREATE TABLE link_alert_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                alert_id INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                actor_id TEXT,
+                payload_json TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (alert_id) REFERENCES link_alerts(id) ON DELETE CASCADE
+            );
+            CREATE INDEX idx_link_alert_events_alert
+                ON link_alert_events(alert_id, created_at DESC);
+            """
+        )
+
+
+def _ensure_link_retest_queue_table(connection: sqlite3.Connection) -> None:
+    row = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='link_retest_queue'"
+    ).fetchone()
+    if row is None:
+        connection.executescript(
+            """
+            CREATE TABLE link_retest_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL,
+                alert_id INTEGER,
+                target_url TEXT NOT NULL,
+                slack_destination_id TEXT,
+                slack_channel_id TEXT NOT NULL,
+                slack_thread_ts TEXT NOT NULL,
+                requested_by TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                result_ok INTEGER,
+                result_status_code INTEGER,
+                result_error_message TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                processed_at TEXT,
+                FOREIGN KEY (alert_id) REFERENCES link_alerts(id) ON DELETE SET NULL
+            );
+            CREATE INDEX idx_link_retest_queue_pending
+                ON link_retest_queue(job_id, status, created_at ASC);
+            """
+        )

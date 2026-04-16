@@ -57,12 +57,6 @@
     }
   },
   "ignore": {
-    "http_status": [
-      400,
-      403,
-      429,
-      999
-    ],
     "url_schemes": [
       "mailto",
       "ftp",
@@ -105,8 +99,39 @@
     "request_timeout_seconds": 10,
     "retry_count": 1,
     "consecutive_failures_before_alert": 2,
+    "http_status": [
+      400,
+      403,
+      429,
+      999
+    ],
     "follow_redirects": true,
-    "write_json_report": false
+    "write_json_report": true,
+    "save_failure_screenshot": true,
+    "tolerance": {
+      "by_category": {
+        "client": {
+          "min_consecutive_failures": 1,
+          "min_age_days": 0
+        },
+        "server": {
+          "min_consecutive_failures": 2,
+          "min_age_days": 2
+        },
+        "timeout": {
+          "min_consecutive_failures": 2,
+          "min_age_days": 2
+        },
+        "connection": {
+          "min_consecutive_failures": 2,
+          "min_age_days": 2
+        },
+        "other": {
+          "min_consecutive_failures": 1,
+          "min_age_days": 0
+        }
+      }
+    }
   },
   "schedule": {
     "timezone": "UTC",
@@ -129,23 +154,48 @@
     },
     "maintenance_windows": []
   },
-  "slack": {
+  "notifications": {
     "enabled": false,
-    "channel_id": "",
-    "webhook_env": "BLINK_SLACK_WEBHOOK_URL",
-    "bot_token_env": "BLINK_SLACK_BOT_TOKEN",
-    "emoji_actions": {
-      "ignore": "x",
-      "claim": "eyes"
-    },
-    "reminders": {
-      "enabled": true,
-      "days_after_first_alert": [
-        3,
-        7,
-        14
-      ]
-    }
+    "max_blinks_per_run": 1,
+    "crawl_summary_on_run": false,
+    "destinations": [
+      {
+        "type": "slack",
+        "id": "slack-default",
+        "enabled": false,
+        "channel_id": "",
+        "webhook_env": "BLINK_SLACK_WEBHOOK_URL",
+        "bot_token_env": "BLINK_SLACK_BOT_TOKEN",
+        "action_aliases": {
+          "ignore": "see_no_evil",
+          "claim": "bust_in_silhouette",
+          "on_hold": "double_vertical_bar",
+          "resolve": "white_check_mark",
+          "retest": "curly_loop"
+        },
+        "lifecycle": {
+          "enabled": false,
+          "post_alerts_via_bot": true,
+          "on_hold_default_days": 7,
+          "on_hold_max_days": 90,
+          "ignore_default_days": 30,
+          "ignore_allow_infinite": true
+        },
+        "reminders": {
+          "enabled": true,
+          "days_after_first_alert": [
+            3,
+            7,
+            14
+          ]
+        },
+        "capabilities": {
+          "supports_threads": true,
+          "supports_reactions": true,
+          "supports_interactive_components": true
+        }
+      }
+    ]
   },
   "features": {
     "ref_counters": [],

@@ -191,3 +191,79 @@ def test_jobs_pages_content_metrics_json(tmp_path) -> None:
     assert result.exit_code == 0
     assert "text_change_percent_prev" in result.output
     assert "page-a" in result.output
+
+
+def test_jobs_page_text_by_url_and_interactive_pick(tmp_path) -> None:
+    runner = CliRunner()
+    db_path = tmp_path / "page-text.db"
+    connection = connect_sqlite(db_path)
+    initialize_schema(connection)
+    repo = CrawlRepository(connection)
+    run_id = repo.create_run("cardano.org")
+    repo.add_page_result(run_id, "https://cardano.org/a", 0, 200, True, main_text="Alpha text body")
+    repo.add_page_result(run_id, "https://cardano.org/b", 0, 200, True, main_text="Beta text body")
+    repo.finish_run(run_id, 2, 0, 0)
+    connection.close()
+
+    by_url = runner.invoke(
+        app,
+        [
+            "jobs",
+            "page-text",
+            "--job",
+            "jobs/cardano.org.job.json",
+            "--db",
+            str(db_path),
+            "--run-id",
+            str(run_id),
+            "--url",
+            "https://cardano.org/a",
+            "--format",
+            "json",
+        ],
+    )
+    assert by_url.exit_code == 0
+    assert '"url": "https://cardano.org/a"' in by_url.output
+    assert "Alpha text body" in by_url.output
+
+    fallback_pick = runner.invoke(
+        app,
+        [
+            "jobs",
+            "page-text",
+            "--job",
+            "jobs/cardano.org.job.json",
+            "--db",
+            str(db_path),
+            "--run-id",
+            str(run_id),
+            "--url",
+            "cardano.org/",
+            "--limit",
+            "10",
+        ],
+        input="1\n",
+    )
+    assert fallback_pick.exit_code == 0
+    assert "Select page #" in fallback_pick.output
+    assert "Alpha text body" in fallback_pick.output or "Beta text body" in fallback_pick.output
+
+    picked = runner.invoke(
+        app,
+        [
+            "jobs",
+            "page-text",
+            "--job",
+            "jobs/cardano.org.job.json",
+            "--db",
+            str(db_path),
+            "--run-id",
+            str(run_id),
+            "--limit",
+            "10",
+        ],
+        input="2\n",
+    )
+    assert picked.exit_code == 0
+    assert "Select page #" in picked.output
+    assert "text_len=" in picked.output

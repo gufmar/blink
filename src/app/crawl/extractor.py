@@ -8,9 +8,8 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from app.models.job_config import JobConfig
 
-# All ignore.* sections from job config (http_status applies to fetched resources, not href parsing).
+# All ignore.* sections from job config for href parsing.
 IGNORE_SECTION_KEYS: tuple[str, ...] = (
-    "http_status",
     "url_schemes",
     "netloc_contains",
     "path_contains",
@@ -22,20 +21,37 @@ IGNORE_SECTION_KEYS: tuple[str, ...] = (
 class _HrefParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
-        self.hrefs: list[str] = []
+        self.anchors: list[tuple[str, str]] = []
+        self._current_href: str | None = None
+        self._current_text_parts: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag.lower() != "a":
             return
+        self._current_href = None
+        self._current_text_parts = []
         for key, value in attrs:
             if key.lower() == "href" and value:
-                self.hrefs.append(value.strip())
+                self._current_href = value.strip()
+                break
+
+    def handle_data(self, data: str) -> None:
+        if self._current_href is not None and data:
+            self._current_text_parts.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() != "a" or self._current_href is None:
+            return
+        text = " ".join(part.strip() for part in self._current_text_parts if part.strip()).strip()
+        self.anchors.append((self._current_href, text))
+        self._current_href = None
+        self._current_text_parts = []
 
 
-def extract_hrefs(html: str) -> list[str]:
+def extract_hrefs(html: str) -> list[tuple[str, str]]:
     parser = _HrefParser()
     parser.feed(html)
-    return parser.hrefs
+    return parser.anchors
 
 
 def normalize_url(url: str, parse_querystring: bool, parse_fragments: bool) -> str:
@@ -87,19 +103,19 @@ def empty_ignore_skip_counts() -> dict[str, int]:
 
 @dataclass(frozen=True)
 class ExtractLinksResult:
-    links: list[tuple[str, bool]]
-    """Pairs of (normalized_url, is_internal) for links that pass ignore rules."""
+    links: list[tuple[str, bool, str]]
+    """Triples of (normalized_url, is_internal, anchor_text) for links that pass ignore rules."""
 
     internal_skipped_by_reason: dict[str, int]
-    """Counts of *internal* candidate URLs skipped per ignore section (href phase; http_status always 0)."""
+    """Counts of *internal* candidate URLs skipped per ignore section (href phase)."""
 
 
 def extract_links(source_url: str, html: str, config: JobConfig) -> ExtractLinksResult:
     """Extract links; count internal URLs dropped by each ignore rule."""
-    links: list[tuple[str, bool]] = []
+    links: list[tuple[str, bool, str]] = []
     skipped: dict[str, int] = empty_ignore_skip_counts()
-    seen: set[str] = set()
-    for href in extract_hrefs(html):
+    seen_index: dict[str, int] = {}
+    for href, anchor_text in extract_hrefs(html):
         absolute = urljoin(source_url, href)
         normalized = normalize_url(
             absolute,
@@ -111,8 +127,12 @@ def extract_links(source_url: str, html: str, config: JobConfig) -> ExtractLinks
             if is_internal_url(normalized, config):
                 skipped[reason] += 1
             continue
-        if normalized in seen:
+        if normalized in seen_index:
+            idx = seen_index[normalized]
+            existing_url, existing_internal, existing_text = links[idx]
+            if not existing_text and anchor_text:
+                links[idx] = (existing_url, existing_internal, anchor_text)
             continue
-        seen.add(normalized)
-        links.append((normalized, is_internal_url(normalized, config)))
+        seen_index[normalized] = len(links)
+        links.append((normalized, is_internal_url(normalized, config), anchor_text))
     return ExtractLinksResult(links=links, internal_skipped_by_reason=skipped)

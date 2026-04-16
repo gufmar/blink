@@ -13,7 +13,7 @@
     "content",
     "link_check",
     "schedule",
-    "slack",
+    "notifications",
     "features"
   ],
   "properties": {
@@ -175,7 +175,6 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "http_status",
         "url_schemes",
         "netloc_contains",
         "path_contains",
@@ -183,11 +182,6 @@
         "fragment_contains"
       ],
       "properties": {
-        "http_status": {
-          "type": "array",
-          "items": { "type": "integer", "minimum": 100, "maximum": 999 },
-          "default": []
-        },
         "url_schemes": {
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
@@ -250,8 +244,11 @@
         "request_timeout_seconds",
         "retry_count",
         "consecutive_failures_before_alert",
+        "http_status",
         "follow_redirects",
-        "write_json_report"
+        "write_json_report",
+        "save_failure_screenshot",
+        "tolerance"
       ],
       "properties": {
         "enabled": { "type": "boolean" },
@@ -261,8 +258,33 @@
           "type": "integer",
           "minimum": 1
         },
+        "http_status": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 100, "maximum": 999 },
+          "default": []
+        },
         "follow_redirects": { "type": "boolean" },
-        "write_json_report": { "type": "boolean", "default": false }
+        "write_json_report": { "type": "boolean", "default": false },
+        "save_failure_screenshot": { "type": "boolean", "default": true },
+        "tolerance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["by_category"],
+          "properties": {
+            "by_category": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["client", "server", "timeout", "connection", "other"],
+              "properties": {
+                "client": { "$ref": "#/$defs/toleranceRule" },
+                "server": { "$ref": "#/$defs/toleranceRule" },
+                "timeout": { "$ref": "#/$defs/toleranceRule" },
+                "connection": { "$ref": "#/$defs/toleranceRule" },
+                "other": { "$ref": "#/$defs/toleranceRule" }
+              }
+            }
+          }
+        }
       }
     },
     "schedule": {
@@ -298,36 +320,23 @@
         }
       }
     },
-    "slack": {
+    "notifications": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["enabled", "channel_id", "webhook_env", "bot_token_env", "reminders"],
+      "required": ["enabled", "max_blinks_per_run", "crawl_summary_on_run", "destinations"],
       "properties": {
         "enabled": { "type": "boolean" },
-        "channel_id": { "type": "string", "default": "" },
-        "webhook_env": { "type": "string", "default": "BLINK_SLACK_WEBHOOK_URL" },
-        "bot_token_env": { "type": "string", "default": "BLINK_SLACK_BOT_TOKEN" },
-        "emoji_actions": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["ignore", "claim"],
-          "properties": {
-            "ignore": { "type": "string", "default": "x" },
-            "claim": { "type": "string", "default": "eyes" }
-          }
+        "max_blinks_per_run": { "type": "integer", "minimum": 1, "default": 1 },
+        "crawl_summary_on_run": { "type": "boolean", "default": false },
+        "slack_signing_secret_env": {
+          "type": "string",
+          "minLength": 1,
+          "default": "BLINK_SLACK_SIGNING_SECRET"
         },
-        "reminders": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["enabled", "days_after_first_alert"],
-          "properties": {
-            "enabled": { "type": "boolean" },
-            "days_after_first_alert": {
-              "type": "array",
-              "minItems": 1,
-              "items": { "type": "integer", "minimum": 1 }
-            }
-          }
+        "destinations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/notificationDestination" },
+          "default": []
         }
       }
     },
@@ -350,6 +359,15 @@
     }
   },
   "$defs": {
+    "toleranceRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min_consecutive_failures", "min_age_days"],
+      "properties": {
+        "min_consecutive_failures": { "type": "integer", "minimum": 1 },
+        "min_age_days": { "type": "integer", "minimum": 0 }
+      }
+    },
     "scheduleTask": {
       "type": "object",
       "additionalProperties": false,
@@ -368,6 +386,79 @@
         "jitter_seconds": { "type": "integer", "minimum": 0 },
         "max_runtime_seconds": { "type": "integer", "minimum": 1 },
         "startup_delay_seconds": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "notificationDestination": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "id",
+        "enabled",
+        "channel_id",
+        "webhook_env",
+        "bot_token_env",
+        "action_aliases",
+        "reminders"
+      ],
+      "properties": {
+        "type": { "type": "string", "enum": ["slack"] },
+        "id": { "type": "string", "minLength": 1 },
+        "enabled": { "type": "boolean" },
+        "channel_id": { "type": "string", "default": "" },
+        "webhook_env": { "type": "string", "default": "BLINK_SLACK_WEBHOOK_URL" },
+        "bot_token_env": { "type": "string", "default": "BLINK_SLACK_BOT_TOKEN" },
+        "action_aliases": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ignore", "claim", "on_hold", "resolve", "retest"],
+          "properties": {
+            "ignore": { "type": "string", "default": "x" },
+            "claim": { "type": "string", "default": "eyes" },
+            "on_hold": { "type": "string", "default": "pause_button" },
+            "resolve": { "type": "string", "default": "white_check_mark" },
+            "retest": { "type": "string", "default": "curly_loop" }
+          }
+        },
+        "lifecycle": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "post_alerts_via_bot": { "type": "boolean", "default": true },
+            "on_hold_default_days": { "type": "integer", "minimum": 1, "default": 7 },
+            "on_hold_max_days": { "type": "integer", "minimum": 1, "default": 90 },
+            "ignore_default_days": { "type": "integer", "minimum": 1, "default": 30 },
+            "ignore_allow_infinite": { "type": "boolean", "default": true }
+          }
+        },
+        "reminders": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "days_after_first_alert"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "days_after_first_alert": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "integer", "minimum": 1 }
+            }
+          }
+        },
+        "capabilities": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "supports_threads",
+            "supports_reactions",
+            "supports_interactive_components"
+          ],
+          "properties": {
+            "supports_threads": { "type": "boolean" },
+            "supports_reactions": { "type": "boolean" },
+            "supports_interactive_components": { "type": "boolean" }
+          }
+        }
       }
     }
   }

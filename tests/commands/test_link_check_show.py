@@ -17,7 +17,7 @@ def test_link_check_show_lists_latest_results_for_run(tmp_path) -> None:
     run_id = repo.create_run("cardano.org")
     repo.add_page_result(run_id, "https://cardano.org/docs", 0, 200, True)
     repo.add_link(run_id, "https://cardano.org/docs", "https://ok.example", False)
-    repo.add_link(run_id, "https://cardano.org/docs", "https://bad.example", False)
+    repo.add_link(run_id, "https://cardano.org/docs", "https://bad.example", False, anchor_text="broken ext link")
     repo.finish_run(run_id, pages_visited=1, pages_failed=0, links_discovered=2)
 
     links = repo.list_links_for_check(run_id)
@@ -60,5 +60,7 @@ def test_link_check_show_lists_latest_results_for_run(tmp_path) -> None:
     assert "bad.example" in result.output
     assert "HTTP Error 404" in result.output
     assert "cardano.org/docs" in result.output
+    assert "broken ext link" in result.output
+    assert "decision_state" in result.output
     assert "ok.example" not in result.output
 

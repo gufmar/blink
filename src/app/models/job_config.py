@@ -67,7 +67,6 @@ class CrawlConfig(TypedDict):
 
 
 class IgnoreConfig(TypedDict):
-    http_status: list[int]
     url_schemes: list[str]
     netloc_contains: list[str]
     path_contains: list[str]
@@ -89,8 +88,28 @@ class LinkCheckConfig(TypedDict):
     request_timeout_seconds: int
     retry_count: int
     consecutive_failures_before_alert: int
+    http_status: list[int]
     follow_redirects: bool
     write_json_report: bool
+    save_failure_screenshot: bool
+    tolerance: "LinkCheckToleranceConfig"
+
+
+class LinkCheckToleranceRuleConfig(TypedDict):
+    min_consecutive_failures: int
+    min_age_days: int
+
+
+class LinkCheckToleranceByCategoryConfig(TypedDict):
+    client: LinkCheckToleranceRuleConfig
+    server: LinkCheckToleranceRuleConfig
+    timeout: LinkCheckToleranceRuleConfig
+    connection: LinkCheckToleranceRuleConfig
+    other: LinkCheckToleranceRuleConfig
+
+
+class LinkCheckToleranceConfig(TypedDict):
+    by_category: LinkCheckToleranceByCategoryConfig
 
 
 class ScheduleTaskConfig(TypedDict):
@@ -115,23 +134,55 @@ class ScheduleConfig(TypedDict):
     maintenance_windows: list[MaintenanceWindowConfig]
 
 
-class EmojiActionsConfig(TypedDict):
+class NotificationActionAliasesConfig(TypedDict):
     ignore: str
     claim: str
+    on_hold: str
+    resolve: str
+    retest: str
 
 
-class ReminderConfig(TypedDict):
+class SlackLifecyclePolicyConfig(TypedDict, total=False):
+    """Slack thread-first lifecycle policy (duration defaults and caps)."""
+
+    enabled: bool
+    post_alerts_via_bot: bool
+    on_hold_default_days: int
+    on_hold_max_days: int
+    ignore_default_days: int
+    ignore_allow_infinite: bool
+
+
+class NotificationReminderConfig(TypedDict):
     enabled: bool
     days_after_first_alert: list[int]
 
 
-class SlackConfig(TypedDict):
+class NotificationCapabilitiesConfig(TypedDict):
+    supports_threads: bool
+    supports_reactions: bool
+    supports_interactive_components: bool
+
+
+class SlackNotificationDestinationConfig(TypedDict):
+    type: Literal["slack"]
+    id: str
     enabled: bool
     channel_id: str
     webhook_env: str
     bot_token_env: str
-    emoji_actions: EmojiActionsConfig
-    reminders: ReminderConfig
+    action_aliases: NotificationActionAliasesConfig
+    reminders: NotificationReminderConfig
+    capabilities: NotRequired[NotificationCapabilitiesConfig]
+    lifecycle: NotRequired[SlackLifecyclePolicyConfig]
+
+
+class NotificationsConfig(TypedDict):
+    enabled: bool
+    max_blinks_per_run: int
+    crawl_summary_on_run: bool
+    destinations: list[SlackNotificationDestinationConfig]
+    slack_signing_secret_env: NotRequired[str]
 
 
 class FeaturesConfig(TypedDict):
@@ -148,5 +199,5 @@ class JobConfig(TypedDict):
     content: ContentConfig
     link_check: LinkCheckConfig
     schedule: ScheduleConfig
-    slack: SlackConfig
+    notifications: NotificationsConfig
     features: FeaturesConfig

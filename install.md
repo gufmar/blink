@@ -27,8 +27,16 @@ python -m pip install --upgrade pip
 
 ## 4) Install Blink (editable + dev tools)
 
+This installs the CLI, crawler stack, Starlette/uvicorn for `blink serve`, and test extras in one step:
+
 ```bash
 python -m pip install -e ".[dev]"
+```
+
+Production-style install without dev tools (still includes `blink serve`):
+
+```bash
+python -m pip install .
 ```
 
 ## 5) Install Playwright browser/runtime dependencies

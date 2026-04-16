@@ -10,7 +10,7 @@ def test_classify_error_category_http_and_transport() -> None:
     assert classify_error_category(404, "HTTP Error 404", ok=False) == "client"
     assert classify_error_category(503, "HTTP Error 503", ok=False) == "server"
     assert classify_error_category(None, "timed out while connecting", ok=False) == "timeout"
-    assert classify_error_category(None, "Name or service not known", ok=False) == "connection"
+    assert classify_error_category(None, "Name or service not known", ok=False) == "client"
     assert classify_error_category(None, "unexpected failure", ok=False) == "other"
     assert classify_error_category(200, None, ok=True) is None
 
@@ -36,6 +36,8 @@ def test_build_link_check_report_groups_errors_and_sources() -> None:
             ok=False,
             error_message="<urlopen error timed out>",
             checked_at="2026-04-15 06:00:10",
+            decision_state="pending_tolerance",
+            decision_reason="tolerance-pending",
         ),
         LinkCheckResultRecord(
             row_id=3,
@@ -46,6 +48,18 @@ def test_build_link_check_report_groups_errors_and_sources() -> None:
             ok=True,
             error_message=None,
             checked_at="2026-04-15 06:00:20",
+        ),
+        LinkCheckResultRecord(
+            row_id=4,
+            crawl_link_id=13,
+            crawl_run_id=55,
+            target_url="https://ignored.example",
+            status_code=404,
+            ok=False,
+            error_message="HTTP Error 404",
+            checked_at="2026-04-15 06:00:30",
+            decision_state="ignored",
+            decision_reason="ignore-rule:1",
         ),
     ]
     payload = build_link_check_report(
@@ -61,20 +75,33 @@ def test_build_link_check_report_groups_errors_and_sources() -> None:
         failed=1,
         errored=1,
         skipped=0,
+        ignored=1,
+        pending_tolerance=1,
+        reportable_failures=1,
         results=results,
-        source_pages_by_target={
-            "https://a.example": ["https://cardano.org/a"],
-            "https://b.example": ["https://cardano.org/b", "https://cardano.org/c"],
+        source_refs_by_target={
+            "https://a.example": [{"page_url": "https://cardano.org/a", "anchor_text": "A text"}],
+            "https://b.example": [
+                {"page_url": "https://cardano.org/b", "anchor_text": None},
+                {"page_url": "https://cardano.org/c", "anchor_text": "C text"},
+            ],
+            "https://ignored.example": [{"page_url": "https://cardano.org/d", "anchor_text": "D text"}],
         },
     )
-    assert payload["summary"]["categories"]["client"] == 1
-    assert payload["summary"]["categories"]["timeout"] == 1
-    assert payload["summary"]["categories"]["server"] == 0
-    assert payload["provenance_stats"]["distinct_external_urls_checked"] == 3
-    assert payload["provenance_stats"]["distinct_source_pages_referenced"] == 3
+    assert payload["job"]["summary"]["categories"]["client"] == 1
+    assert payload["job"]["summary"]["categories"]["timeout"] == 0
+    assert payload["job"]["summary"]["categories"]["server"] == 0
+    assert payload["job"]["summary"]["ignored"] == 1
+    assert payload["job"]["summary"]["pending_tolerance"] == 1
+    assert payload["job"]["summary"]["reportable_failures"] == 1
+    assert payload["job"]["provenance_stats"]["distinct_external_urls_checked"] == 4
+    assert payload["job"]["provenance_stats"]["distinct_source_pages_referenced"] == 4
     assert len(payload["errors"]["client"]) == 1
-    assert len(payload["errors"]["timeout"]) == 1
-    assert payload["errors"]["client"][0]["source_pages"] == ["https://cardano.org/a"]
+    assert len(payload["errors"]["timeout"]) == 0
+    assert payload["errors"]["client"][0]["target_url"] == "https://a.example"
+    assert payload["errors"]["client"][0]["blinks"][0]["anchor_text"] == "A text"
+    assert len(payload["job"]["suppressed"]["ignored"]) == 1
+    assert len(payload["job"]["suppressed"]["pending_tolerance"]) == 1
 
 
 def test_report_filename_format() -> None:

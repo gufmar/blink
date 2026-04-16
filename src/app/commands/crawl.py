@@ -12,6 +12,8 @@ from app.config.loader import load_effective_job_config
 from app.config.schema import validate_job_config
 from app.crawl.extractor import IGNORE_SECTION_KEYS
 from app.crawl.runner import CrawlSummary, run_crawl
+from app.notifications.models import NotificationMessage
+from app.notifications.service import NotificationService
 from app.persistence.repository import CrawlRepository
 from app.persistence.sqlite import connect_sqlite, initialize_schema
 from app.render.playwright_client import (
@@ -120,6 +122,53 @@ def _emit_page_diagnostics(result: RenderResult, depth: int, observability: Obse
         event_logger("crawl.page_artifact", run_id=run_id).info(f"html_snapshot={result.html_snapshot_path}")
 
 
+def _send_crawl_summary_notification(config: dict, *, db_path: Path, summary: CrawlSummary) -> None:
+    notifications = config["notifications"]
+    if not notifications["enabled"] or not notifications["crawl_summary_on_run"]:
+        return
+    connection = connect_sqlite(db_path)
+    initialize_schema(connection)
+    repository = CrawlRepository(connection)
+    try:
+        prev_run_id = repository.get_previous_run_id(config["meta"]["job_id"], summary.run_id)
+        prev = repository.list_run_history(config["meta"]["job_id"], limit=2)
+    finally:
+        connection.close()
+    previous = prev[1] if len(prev) > 1 else None
+
+    def delta(current: int, old: int | None) -> str:
+        if old is None:
+            return "n/a"
+        return f"{current - old:+d}"
+
+    body = (
+        f"job_id={config['meta']['job_id']}\n"
+        f"run_id={summary.run_id}\n"
+        f"pages_visited={summary.pages_visited} (delta {delta(summary.pages_visited, previous.pages_visited if previous else None)})\n"
+        f"pages_failed={summary.pages_failed} (delta {delta(summary.pages_failed, previous.pages_failed if previous else None)})\n"
+        f"links_discovered={summary.links_discovered} (delta {delta(summary.links_discovered, previous.links_discovered if previous else None)})\n"
+        f"ignored_internal_links={sum(summary.ignore_internal_skipped.values())}\n"
+        f"external_unique={summary.unique_external_urls}\n"
+        f"previous_run_id={prev_run_id if prev_run_id is not None else '-'}"
+    )
+    message = NotificationMessage(
+        job_id=config["meta"]["job_id"],
+        title=f"Blink crawl summary ({config['meta']['job_id']})",
+        body=body,
+    )
+    service = NotificationService()
+    dispatches = service.send_message(notifications, message)
+    for dispatch in dispatches:
+        if dispatch.success:
+            event_logger("notifications.crawl_summary_sent", run_id=summary.run_id).info(
+                f"provider={dispatch.provider} destination={dispatch.destination_id}"
+            )
+        else:
+            event_logger("notifications.crawl_summary_failed", run_id=summary.run_id).warning(
+                f"provider={dispatch.provider} destination={dispatch.destination_id} error={dispatch.error or 'unknown'}"
+            )
+
+
 @crawl_app.command("run")
 def run(
     job: str = typer.Option(..., "--job", help="Path to job JSON file."),
@@ -205,6 +254,7 @@ def run(
         for failed_url, message in summary.failed_pages:
             typer.echo(f"- {failed_url}: {message}", err=True)
             event_logger("crawl.page_failed", run_id=summary.run_id).warning(f"url={failed_url} error={message}")
+    _send_crawl_summary_notification(config, db_path=db_path, summary=summary)
 
 
 @crawl_app.command("explore")

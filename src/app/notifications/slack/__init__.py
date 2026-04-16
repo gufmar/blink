@@ -1,0 +1,2 @@
+"""Slack notification adapter."""
+

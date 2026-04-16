@@ -104,7 +104,9 @@ def run_crawl(
                 time.sleep(delay)
 
             if status_hook:
-                status_hook(f"Crawling depth={item.depth}: {item.url}")
+                known_total = pages_visited + len(frontier) + 1
+                progress_pct = int((pages_visited / known_total) * 100) if known_total > 0 else 0
+                status_hook(f"Crawling depth={item.depth} progress={progress_pct}%: {item.url}")
 
             last_error: str | None = None
             render_result: RenderResult | None = None
@@ -164,7 +166,7 @@ def run_crawl(
             extracted = extract_links(render_result.url, render_result.html, config)
             for key in IGNORE_SECTION_KEYS:
                 ignore_skipped[key] += extracted.internal_skipped_by_reason[key]
-            for url, is_internal in extracted.links:
+            for url, is_internal, anchor_text in extracted.links:
                 links_discovered += 1
                 if not is_internal:
                     unique_external.add(url)
@@ -173,6 +175,7 @@ def run_crawl(
                     source_url=render_result.url,
                     target_url=url,
                     is_internal=is_internal,
+                    anchor_text=anchor_text,
                 )
                 if is_internal and (max_depth is None or item.depth < max_depth):
                     frontier.enqueue(url, depth=item.depth + 1)

@@ -483,6 +483,128 @@ def pages_content_metrics(
     _print_numbered_items(items, output_format=output_format)
 
 
+@jobs_app.command("page-text")
+def page_text(
+    job: str = typer.Option(..., "--job", help="Path to job JSON file."),
+    db: Path | None = typer.Option(None, "--db", help="SQLite DB path override."),
+    run_id: int | None = typer.Option(None, "--run-id", help="Crawl run id; defaults to latest."),
+    url: str | None = typer.Option(
+        None,
+        "--url",
+        help="Page URL lookup key: exact match first; falls back to partial URL search.",
+    ),
+    search: str | None = typer.Option(None, "--search", help="Filter when listing pages for interactive pick."),
+    limit: int = typer.Option(100, "--limit", min=1, help="Max pages to list when --url is omitted."),
+    output_format: str = typer.Option("table", "--format", help="Output format: table|json."),
+) -> None:
+    """Show stored extracted main text for a page URL in a selected run."""
+    if output_format not in {"table", "json"}:
+        typer.secho("Invalid format. Use table or json.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+    try:
+        config = load_effective_job_config(job)
+    except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
+        typer.secho(f"Failed to load job config: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+    db_path = _resolve_db_path(config, db)
+    connection = connect_sqlite(db_path)
+    initialize_schema(connection)
+    repository = CrawlRepository(connection)
+    try:
+        selected_run_id = run_id if run_id is not None else repository.get_latest_run_id(config["meta"]["job_id"])
+        if selected_run_id is None:
+            typer.echo("No crawl run found for this job.")
+            return
+
+        selected_url = url
+        if selected_url is None:
+            candidates = repository.list_pages_with_text(selected_run_id, search=search, limit=limit)
+            if not candidates:
+                typer.echo("No pages with stored text found for this run.")
+                return
+            if output_format == "json":
+                payload = [
+                    {
+                        "index": index,
+                        "url": row.url,
+                        "text_len": row.text_len,
+                        "created_at": row.created_at,
+                    }
+                    for index, row in enumerate(candidates, start=1)
+                ]
+                typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+                return
+            _print_numbered_items(
+                [
+                    {"url": row.url, "text_len": row.text_len, "created_at": row.created_at}
+                    for row in candidates
+                ],
+                output_format="table",
+            )
+            picked = typer.prompt("Select page #", type=int)
+            if picked < 1 or picked > len(candidates):
+                typer.secho("Selection out of range.", fg=typer.colors.RED, err=True)
+                raise typer.Exit(code=1)
+            selected_url = candidates[picked - 1].url
+            record = repository.get_page_text(selected_run_id, selected_url)
+        else:
+            record = repository.get_page_text(selected_run_id, selected_url)
+            if record is None:
+                candidates = repository.list_pages_with_text(selected_run_id, search=selected_url, limit=limit)
+                if not candidates:
+                    typer.echo("No stored text found for that page URL in this run.")
+                    return
+                if output_format == "json":
+                    payload = [
+                        {
+                            "index": index,
+                            "url": row.url,
+                            "text_len": row.text_len,
+                            "created_at": row.created_at,
+                        }
+                        for index, row in enumerate(candidates, start=1)
+                    ]
+                    typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+                    return
+                _print_numbered_items(
+                    [
+                        {"url": row.url, "text_len": row.text_len, "created_at": row.created_at}
+                        for row in candidates
+                    ],
+                    output_format="table",
+                )
+                picked = typer.prompt("Select page #", type=int)
+                if picked < 1 or picked > len(candidates):
+                    typer.secho("Selection out of range.", fg=typer.colors.RED, err=True)
+                    raise typer.Exit(code=1)
+                record = repository.get_page_text(selected_run_id, candidates[picked - 1].url)
+    finally:
+        connection.close()
+
+    if record is None:
+        typer.echo("No stored text found for that page URL in this run.")
+        return
+
+    if output_format == "json":
+        payload = {
+            "run_id": record.run_id,
+            "url": record.url,
+            "created_at": record.created_at,
+            "text_len": record.text_len,
+            "main_text": record.main_text,
+        }
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    typer.echo(f"run_id={record.run_id}")
+    typer.echo(f"url={record.url}")
+    typer.echo(f"created_at={record.created_at}")
+    typer.echo(f"text_len={record.text_len}")
+    typer.echo("")
+    typer.echo(record.main_text)
+
+
 @jobs_app.command("db-stats")
 def db_stats(
     job: str = typer.Option(..., "--job", help="Path to job JSON file."),
