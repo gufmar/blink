@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import html
 import json
 import os
 import re
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from app.config.loader import load_effective_job_config, project_root
@@ -26,6 +28,7 @@ from app.notifications.slack.signature import verify_slack_signing_secret
 from app.persistence.repository import CrawlRepository
 from app.persistence.sqlite import connect_sqlite, initialize_schema
 from app.runtime.job_paths import build_job_paths
+from app.schedule.service import BlinkSchedulerService
 
 _SLUG_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
 
@@ -36,6 +39,33 @@ def _json_error(status: int, code: str) -> JSONResponse:
 
 async def health(_: Request) -> JSONResponse:
     return JSONResponse({"status": "ok"})
+
+
+async def api_schedule(request: Request) -> JSONResponse:
+    svc: BlinkSchedulerService = request.app.state.scheduler_service
+    return JSONResponse(svc.build_schedule_payload())
+
+
+async def schedule_dashboard(request: Request) -> HTMLResponse:
+    svc: BlinkSchedulerService = request.app.state.scheduler_service
+    payload = svc.build_schedule_payload()
+    dumped = json.dumps(payload, indent=2)
+    safe = html.escape(dumped)
+    page = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Blink schedules</title>
+</head>
+<body>
+  <h1>Blink schedules</h1>
+  <p><a href="/health">health</a> · <a href="/api/schedule">JSON</a></p>
+  <pre>{safe}</pre>
+</body>
+</html>
+"""
+    return HTMLResponse(page)
 
 
 def _should_ignore_event_callback(payload: dict[str, Any]) -> bool:
@@ -229,18 +259,34 @@ def _process_event_callback(config: JobConfig, payload: dict[str, Any]) -> JSONR
         connection.close()
 
 
-def build_app(*, jobs_root: Path | None = None) -> Starlette:
+def build_app(*, jobs_root: Path | None = None, enable_scheduler: bool = False) -> Starlette:
     root = (jobs_root if jobs_root is not None else project_root() / "jobs").resolve()
     routes, signing_env_name = _collect_channel_routes(root)
+    scheduler_service = BlinkSchedulerService(root)
+
+    @asynccontextmanager
+    async def lifespan(app: Starlette):
+        _ = app
+        if enable_scheduler:
+            scheduler_service.start()
+        yield
+        if enable_scheduler:
+            scheduler_service.shutdown(wait=True)
+
     app = Starlette(
         routes=[
             Route("/health", health, methods=["GET"]),
             Route("/notifications/slack/health", health, methods=["GET"]),
+            Route("/api/schedule", api_schedule, methods=["GET"]),
+            Route("/dashboard", schedule_dashboard, methods=["GET"]),
             Route("/notifications/slack/events", slack_events, methods=["POST"]),
             Route("/notifications/slack/job/{job_slug}", slack_job_event, methods=["POST"]),
         ],
+        lifespan=lifespan,
     )
     app.state.jobs_root = root
     app.state.channel_routes = routes
     app.state.signing_secret_env_name = signing_env_name
+    app.state.scheduler_service = scheduler_service
+    app.state.enable_scheduler = enable_scheduler
     return app

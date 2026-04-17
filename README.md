@@ -107,6 +107,19 @@ Optional overrides:
 blink crawl run --job jobs/cardano.org.job.json --db /tmp/custom.sqlite3 --debug
 ```
 
+## Scheduler (`blink serve`)
+
+Each job’s `schedule` section defines **crawl** and **link-check** tasks (interval or cron). `blink serve` starts Slack routes and a background scheduler that runs `blink crawl run` and `blink link-check run` as **subprocesses** (same as interactive CLI). Job files whose name starts with `_` (such as `_default.job.json`) are not registered.
+
+- Persisted scheduler state: `<jobs-root>/.blink/scheduler.sqlite`
+- `GET /api/schedule` — JSON with declarative schedule plus next/last run times
+- `GET /dashboard` — minimal read-only HTML view of the same payload
+- `blink schedule show [--jobs-root <dir>] [--job <path>]` — human-readable schedule from disk
+- `blink schedule status --url http://127.0.0.1:8080` — status table from a running server
+- `blink schedule status --jobs-root <dir>` — combine on-disk jobs with local scheduler state (no HTTP)
+
+Maintenance windows (`schedule.maintenance_windows`) use standard five-field cron strings in `schedule.timezone`. Overlap policy **`skip`** is implemented: if a task is still running, the next tick is skipped.
+
 ## DB Inspection + Explore (Step 5)
 
 Show recent job run history:

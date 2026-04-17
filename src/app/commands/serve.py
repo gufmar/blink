@@ -85,7 +85,7 @@ def serve_main(
 
     root = jobs_root.resolve() if jobs_root is not None else project_root() / "jobs"
     _emit_env_diagnostics(root)
-    app = build_app(jobs_root=root)
+    app = build_app(jobs_root=root, enable_scheduler=True)
     routes = getattr(app.state, "channel_routes", {})
     if isinstance(routes, dict):
         _emit_route_registry_diagnostics(routes)
