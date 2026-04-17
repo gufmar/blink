@@ -83,7 +83,11 @@
         },
         "user_agent": { "type": "string", "minLength": 1 },
         "request_delay_seconds": { "type": "number", "minimum": 0 },
-        "max_pages_per_run": { "type": "integer", "minimum": 0 },
+        "max_pages_per_run": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum pages per crawl run; 0 means no explicit page limit (still bounded by max_depth, frontier, and optional runtime limits)."
+        },
         "max_depth": {
           "oneOf": [
             { "type": "integer", "minimum": 0 },

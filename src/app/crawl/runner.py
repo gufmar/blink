@@ -67,7 +67,9 @@ def run_crawl(
     elif max_pages_from_job > 0:
         max_pages = max_pages_from_job
     else:
-        max_pages = 100  # safety cap for MVP
+        # 0 = no explicit page cap (same as crawl explore --max-pages 0); rely on max_depth,
+        # frontier exhaustion, and optional max_runtime_seconds on scheduled runs.
+        max_pages = 10**9
 
     max_depth = config["crawl"]["max_depth"]
     delay = config["crawl"]["request_delay_seconds"]

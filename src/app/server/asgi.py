@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import html
 import json
 import os
 import re
@@ -29,6 +28,7 @@ from app.persistence.repository import CrawlRepository
 from app.persistence.sqlite import connect_sqlite, initialize_schema
 from app.runtime.job_paths import build_job_paths
 from app.schedule.service import BlinkSchedulerService
+from app.server.dashboard_page import render_schedule_dashboard_html
 
 _SLUG_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
 
@@ -49,22 +49,7 @@ async def api_schedule(request: Request) -> JSONResponse:
 async def schedule_dashboard(request: Request) -> HTMLResponse:
     svc: BlinkSchedulerService = request.app.state.scheduler_service
     payload = svc.build_schedule_payload()
-    dumped = json.dumps(payload, indent=2)
-    safe = html.escape(dumped)
-    page = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Blink schedules</title>
-</head>
-<body>
-  <h1>Blink schedules</h1>
-  <p><a href="/health">health</a> · <a href="/api/schedule">JSON</a></p>
-  <pre>{safe}</pre>
-</body>
-</html>
-"""
+    page = render_schedule_dashboard_html(payload)
     return HTMLResponse(page)
 
 

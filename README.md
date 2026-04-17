@@ -113,7 +113,7 @@ Each job’s `schedule` section defines **crawl** and **link-check** tasks (inte
 
 - Persisted scheduler state: `<jobs-root>/.blink/scheduler.sqlite`
 - `GET /api/schedule` — JSON with declarative schedule plus next/last run times
-- `GET /dashboard` — minimal read-only HTML view of the same payload
+- `GET /dashboard` — read-only schedule UI (summary cards + table). Links use **relative** `../…` paths so the app can sit behind a reverse proxy (e.g. `https://host/blink/dashboard` without breaking navigation)
 - `blink schedule show [--jobs-root <dir>] [--job <path>]` — human-readable schedule from disk
 - `blink schedule status --url http://127.0.0.1:8080` — status table from a running server
 - `blink schedule status --jobs-root <dir>` — combine on-disk jobs with local scheduler state (no HTTP)
