@@ -62,7 +62,7 @@ Blink posts the main broken-link alert, then (when `notifications.destinations[]
    - `ignore https://example.com/broken 30d`
    - `retest https://example.com/broken`
 
-Inbound events are normalized to `InboundActionEvent` (see below). Apply with `blink notifications slack handle-event --job <job.json> --event <payload.json>` for ad-hoc testing, or run `blink serve` and point Slack’s Events **Request URL** at `https://<host>/notifications/slack/job/<slug>` (see README). Requests must verify with the Slack signing secret (`notifications.slack_signing_secret_env`).
+Inbound events are normalized to `InboundActionEvent` (see below). Apply with `blink notifications slack handle-event --job <job.json> --event <payload.json>` for ad-hoc testing, or run `blink serve` and point Slack's Events **Request URL** at `https://<host>/notifications/slack/events` (see README). In Step 14 routing, Blink maps inbound events to jobs by `channel_id`, with an enforced 1:1 `channel_id -> job` relationship in one workspace. Requests must verify with the Slack signing secret (`notifications.slack_signing_secret_env`).
 
 ### Queued retest (`retest` / `:curly_loop:`)
 

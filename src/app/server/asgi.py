@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -15,7 +16,12 @@ from starlette.routing import Route
 from app.config.loader import load_effective_job_config, project_root
 from app.config.schema import validate_job_config
 from app.models.job_config import JobConfig
-from app.notifications.slack.http_handler import apply_inbound_slack_from_envelope, resolve_notifications_signing_secret
+from app.notifications.slack.http_handler import (
+    apply_inbound_slack_from_envelope,
+    extract_slack_channel_id,
+    notifications_signing_secret_env_name,
+    resolve_notifications_signing_secret,
+)
 from app.notifications.slack.signature import verify_slack_signing_secret
 from app.persistence.repository import CrawlRepository
 from app.persistence.sqlite import connect_sqlite, initialize_schema
@@ -108,6 +114,104 @@ async def slack_job_event(request: Request) -> Response:
     return _process_event_callback(config, payload)
 
 
+def _load_and_validate_job_config(job_path: Path) -> tuple[JobConfig | None, str | None]:
+    try:
+        config = load_effective_job_config(job_path)
+    except (FileNotFoundError, ValueError, json.JSONDecodeError):
+        return None, "job_load_failed"
+    issues = validate_job_config(config)
+    if issues:
+        return None, "invalid_config"
+    return config, None
+
+
+def _collect_channel_routes(jobs_root: Path) -> tuple[dict[str, Path], str]:
+    """Build channel_id -> job_path map and return unified signing secret env name."""
+    routes: dict[str, Path] = {}
+    signing_env_names: set[str] = set()
+    for job_path in sorted(jobs_root.glob("*.job.json")):
+        config, err = _load_and_validate_job_config(job_path)
+        if config is None:
+            raise RuntimeError(f"Failed loading job config for routing: {job_path} ({err})")
+        notifications = config["notifications"]
+        signing_env_names.add(notifications_signing_secret_env_name(config))
+        if not config["meta"]["enabled"] or not notifications["enabled"]:
+            continue
+        for destination in notifications["destinations"]:
+            if destination["type"] != "slack" or not destination["enabled"]:
+                continue
+            channel_id = str(destination.get("channel_id") or "").strip()
+            if not channel_id:
+                continue
+            existing = routes.get(channel_id)
+            if existing is not None and existing != job_path:
+                raise RuntimeError(
+                    f"Duplicate Slack channel mapping for {channel_id}: {existing.name} and {job_path.name}"
+                )
+            routes[channel_id] = job_path
+    if not signing_env_names:
+        signing_env_names.add("BLINK_SLACK_SIGNING_SECRET")
+    if len(signing_env_names) > 1:
+        names = ", ".join(sorted(signing_env_names))
+        raise RuntimeError(f"Conflicting slack_signing_secret_env across jobs: {names}")
+    return routes, next(iter(signing_env_names))
+
+
+def _verify_signature_with_env(raw_body: bytes, payload: dict[str, Any], env_name: str, request: Request) -> Response | None:
+    _ = payload
+    secret_raw = os.getenv(env_name)
+    secret = secret_raw.strip() if secret_raw else ""
+    if not secret:
+        return _json_error(500, "signing_secret_unconfigured")
+    ts = request.headers.get("x-slack-request-timestamp") or ""
+    sig = request.headers.get("x-slack-signature")
+    if not verify_slack_signing_secret(
+        signing_secret=secret,
+        request_timestamp=ts,
+        raw_body=raw_body,
+        signature_header=sig,
+    ):
+        return _json_error(401, "invalid_signature")
+    return None
+
+
+async def slack_events(request: Request) -> Response:
+    raw_body = await request.body()
+    try:
+        payload = json.loads(raw_body.decode("utf-8"))
+    except json.JSONDecodeError:
+        return _json_error(400, "invalid_json")
+    if not isinstance(payload, dict):
+        return _json_error(400, "invalid_payload")
+
+    verify_err = _verify_signature_with_env(raw_body, payload, request.app.state.signing_secret_env_name, request)
+    if verify_err is not None:
+        return verify_err
+
+    envelope_type = str(payload.get("type") or "")
+    if envelope_type == "url_verification":
+        challenge = payload.get("challenge")
+        if not challenge or not isinstance(challenge, str):
+            return _json_error(400, "missing_challenge")
+        return JSONResponse({"challenge": challenge})
+    if envelope_type != "event_callback":
+        return _json_error(400, "unsupported_type")
+    if _should_ignore_event_callback(payload):
+        return JSONResponse({"ok": True, "ignored": True})
+
+    channel_id = extract_slack_channel_id(payload).strip()
+    if not channel_id:
+        return JSONResponse({"ok": True, "ignored": True, "reason": "missing_channel"})
+    job_path = request.app.state.channel_routes.get(channel_id)
+    if job_path is None:
+        return JSONResponse({"ok": True, "ignored": True, "reason": "unmapped_channel"})
+
+    config, err = _load_and_validate_job_config(job_path)
+    if config is None:
+        return _json_error(500, err or "job_load_failed")
+    return _process_event_callback(config, payload)
+
+
 def _process_event_callback(config: JobConfig, payload: dict[str, Any]) -> JSONResponse:
     paths = build_job_paths(config["meta"]["job_id"])
     db_path = paths.db_path
@@ -127,12 +231,16 @@ def _process_event_callback(config: JobConfig, payload: dict[str, Any]) -> JSONR
 
 def build_app(*, jobs_root: Path | None = None) -> Starlette:
     root = (jobs_root if jobs_root is not None else project_root() / "jobs").resolve()
+    routes, signing_env_name = _collect_channel_routes(root)
     app = Starlette(
         routes=[
             Route("/health", health, methods=["GET"]),
             Route("/notifications/slack/health", health, methods=["GET"]),
+            Route("/notifications/slack/events", slack_events, methods=["POST"]),
             Route("/notifications/slack/job/{job_slug}", slack_job_event, methods=["POST"]),
         ],
     )
     app.state.jobs_root = root
+    app.state.channel_routes = routes
+    app.state.signing_secret_env_name = signing_env_name
     return app

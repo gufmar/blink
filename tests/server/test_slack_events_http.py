@@ -22,7 +22,13 @@ def _sign(secret: str, body: bytes, ts: str | None = None) -> tuple[str, str]:
     return ts, f"v0={digest}"
 
 
-def _prepare_job_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str = "zzz") -> Path:
+def _prepare_job_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str = "zzz",
+    *,
+    channel_id: str = "C123",
+) -> Path:
     """Copy default job template, set meta.job_id and notifications.slack_signing_secret_env."""
     root = Path(__file__).resolve().parents[2]
     default_src = root / "jobs" / "_default.job.json"
@@ -33,6 +39,10 @@ def _prepare_job_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
     data["meta"]["name"] = "Test Job"
     data["notifications"]["enabled"] = True
     data["notifications"]["slack_signing_secret_env"] = "TEST_SLACK_SIGNING_SECRET"
+    destinations = data["notifications"].get("destinations") or []
+    if destinations and isinstance(destinations[0], dict):
+        destinations[0]["enabled"] = True
+        destinations[0]["channel_id"] = channel_id
     job_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
     db_path = tmp_path / f"{name}.sqlite3"
 
@@ -71,7 +81,7 @@ def test_url_verification_returns_challenge(tmp_path: Path, monkeypatch: pytest.
     body = json.dumps(body_dict).encode("utf-8")
     ts, sig = _sign("mysecret", body)
     r = client.post(
-        "/notifications/slack/job/zzz",
+        "/notifications/slack/events",
         content=body,
         headers={"X-Slack-Request-Timestamp": ts, "X-Slack-Signature": sig},
     )
@@ -86,7 +96,7 @@ def test_invalid_signature(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     client = TestClient(app)
     body = b'{"type":"url_verification","challenge":"x"}'
     r = client.post(
-        "/notifications/slack/job/zzz",
+        "/notifications/slack/events",
         content=body,
         headers={"X-Slack-Request-Timestamp": str(int(time.time())), "X-Slack-Signature": "v0=deadbeef"},
     )
@@ -129,13 +139,48 @@ def test_event_callback_applies_when_patched(tmp_path: Path, monkeypatch: pytest
     body = json.dumps(envelope).encode("utf-8")
     ts, sig = _sign("sec", body)
     r = client.post(
-        "/notifications/slack/job/zzz",
+        "/notifications/slack/events",
         content=body,
         headers={"X-Slack-Request-Timestamp": ts, "X-Slack-Signature": sig},
     )
     assert r.status_code == 200
     assert r.json().get("ok") is True
     assert mock.called
+
+
+def test_unmapped_channel_returns_ignored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _prepare_job_file(tmp_path, monkeypatch, channel_id="C-MAPPED")
+    monkeypatch.setenv("TEST_SLACK_SIGNING_SECRET", "sec")
+    app = build_app(jobs_root=tmp_path)
+    client = TestClient(app)
+    envelope = {
+        "type": "event_callback",
+        "event": {
+            "type": "reaction_added",
+            "user": "U1",
+            "reaction": "x",
+            "item": {"type": "message", "channel": "C-OTHER", "ts": "1.1"},
+        },
+    }
+    body = json.dumps(envelope).encode("utf-8")
+    ts, sig = _sign("sec", body)
+    r = client.post(
+        "/notifications/slack/events",
+        content=body,
+        headers={"X-Slack-Request-Timestamp": ts, "X-Slack-Signature": sig},
+    )
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload.get("ok") is True
+    assert payload.get("ignored") is True
+    assert payload.get("reason") == "unmapped_channel"
+
+
+def test_duplicate_channel_mapping_fails_build_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _prepare_job_file(tmp_path, monkeypatch, name="job-a", channel_id="C123")
+    _prepare_job_file(tmp_path, monkeypatch, name="job-b", channel_id="C123")
+    with pytest.raises(RuntimeError, match="Duplicate Slack channel mapping"):
+        _ = build_app(jobs_root=tmp_path)
 
 
 def test_notifications_config_must_have_signing_secret_env_or_500(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -155,6 +200,10 @@ def test_notifications_config_must_have_signing_secret_env_or_500(tmp_path: Path
     body_dict = {"type": "url_verification", "challenge": "c"}
     body = json.dumps(body_dict).encode("utf-8")
     # sign with dummy — handler checks secret before verify; order is load config, secret None -> 500
-    r = client.post("/notifications/slack/job/nosec", content=body, headers={"X-Slack-Request-Timestamp": "1", "X-Slack-Signature": "v0=x"})
+    r = client.post(
+        "/notifications/slack/events",
+        content=body,
+        headers={"X-Slack-Request-Timestamp": "1", "X-Slack-Signature": "v0=x"},
+    )
     assert r.status_code == 500
     assert r.json()["error"] == "signing_secret_unconfigured"

@@ -24,6 +24,11 @@ def slack_event_channel_hint(payload: dict[str, Any]) -> str:
     return ""
 
 
+def extract_slack_channel_id(payload: dict[str, Any]) -> str:
+    """Canonical helper for extracting Slack channel id from an envelope."""
+    return slack_event_channel_hint(payload)
+
+
 def notifications_signing_secret_env_name(config: JobConfig) -> str:
     return str(config["notifications"].get("slack_signing_secret_env") or "BLINK_SLACK_SIGNING_SECRET")
 
