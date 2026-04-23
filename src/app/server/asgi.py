@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -28,7 +29,12 @@ from app.persistence.repository import CrawlRepository
 from app.persistence.sqlite import connect_sqlite, initialize_schema
 from app.runtime.job_paths import build_job_paths
 from app.schedule.service import BlinkSchedulerService
-from app.server.dashboard_page import render_schedule_dashboard_html
+from app.server.dashboard_page import (
+    render_results_job_html,
+    render_results_jobs_html,
+    render_results_run_html,
+    render_schedule_dashboard_html,
+)
 
 _SLUG_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
 
@@ -46,10 +52,295 @@ async def api_schedule(request: Request) -> JSONResponse:
     return JSONResponse(svc.build_schedule_payload())
 
 
+def _path_for(request: Request, route_name: str, **path_params: object) -> str:
+    return str(request.url_for(route_name, **path_params))
+
+
+def _load_job_entries(jobs_root: Path) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for job_path in sorted(jobs_root.glob("*.job.json")):
+        if job_path.name.startswith("_"):
+            continue
+        config, _ = _load_and_validate_job_config(job_path)
+        if config is None:
+            continue
+        entries.append(
+            {
+                "job_id": config["meta"]["job_id"],
+                "name": config["meta"]["name"],
+                "enabled": bool(config["meta"]["enabled"]),
+                "job_file": str(job_path),
+            }
+        )
+    return entries
+
+
+def _db_path_for_job(jobs_root: Path, job_id: str) -> Path:
+    return jobs_root / job_id / "db" / f"{job_id}.sqlite3"
+
+
+def _open_repo_if_exists(db_path: Path) -> tuple[CrawlRepository, sqlite3.Connection] | None:
+    if not db_path.exists():
+        return None
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    return CrawlRepository(conn), conn
+
+
+def _close_repo(repo_and_conn: tuple[CrawlRepository, sqlite3.Connection] | None) -> None:
+    if repo_and_conn is None:
+        return
+    _, conn = repo_and_conn
+    conn.close()
+
+
+def _job_entry_by_id(jobs_root: Path, job_id: str) -> dict[str, Any] | None:
+    for entry in _load_job_entries(jobs_root):
+        if entry["job_id"] == job_id:
+            return entry
+    return None
+
+
+def _serialize_run_history(job_id: str, repo: CrawlRepository | None, *, limit: int) -> list[dict[str, Any]]:
+    if repo is None:
+        return []
+    try:
+        runs = repo.list_run_history(job_id, limit=limit)
+    except sqlite3.Error:
+        return []
+    return [
+        {
+            "run_id": rec.run_id,
+            "started_at": rec.started_at,
+            "finished_at": rec.finished_at,
+            "pages_visited": rec.pages_visited,
+            "pages_failed": rec.pages_failed,
+            "links_discovered": rec.links_discovered,
+        }
+        for rec in runs
+    ]
+
+
 async def schedule_dashboard(request: Request) -> HTMLResponse:
     svc: BlinkSchedulerService = request.app.state.scheduler_service
     payload = svc.build_schedule_payload()
-    page = render_schedule_dashboard_html(payload)
+    for task in payload.get("tasks") or []:
+        job_id = str(task.get("job_id") or "")
+        if job_id:
+            task["results_url"] = _path_for(request, "dashboard_results_job", job_id=job_id)
+    page = render_schedule_dashboard_html(
+        payload,
+        links={
+            "health": _path_for(request, "health"),
+            "schedule_json": _path_for(request, "api_schedule"),
+            "slack_health": _path_for(request, "slack_health"),
+            "results_index": _path_for(request, "dashboard_results_jobs"),
+            "schedule_refresh": _path_for(request, "dashboard_schedule"),
+        },
+    )
+    return HTMLResponse(page)
+
+
+async def api_results_jobs(request: Request) -> JSONResponse:
+    jobs_root: Path = request.app.state.jobs_root
+    jobs = _load_job_entries(jobs_root)
+    out: list[dict[str, Any]] = []
+    for job in jobs:
+        repo_and_conn = _open_repo_if_exists(_db_path_for_job(jobs_root, str(job["job_id"])))
+        repo = repo_and_conn[0] if repo_and_conn else None
+        try:
+            history = _serialize_run_history(str(job["job_id"]), repo, limit=1)
+            out.append(
+                {
+                    **job,
+                    "latest_run": history[0] if history else None,
+                }
+            )
+        finally:
+            _close_repo(repo_and_conn)
+    return JSONResponse({"jobs": out})
+
+
+async def api_results_job_runs(request: Request) -> JSONResponse:
+    jobs_root: Path = request.app.state.jobs_root
+    job_id = str(request.path_params["job_id"])
+    job = _job_entry_by_id(jobs_root, job_id)
+    if job is None:
+        return _json_error(404, "job_not_found")
+    repo_and_conn = _open_repo_if_exists(_db_path_for_job(jobs_root, job_id))
+    repo = repo_and_conn[0] if repo_and_conn else None
+    try:
+        runs = _serialize_run_history(job_id, repo, limit=100)
+    finally:
+        _close_repo(repo_and_conn)
+    return JSONResponse({"job": job, "runs": runs})
+
+
+async def api_results_run_detail(request: Request) -> JSONResponse:
+    jobs_root: Path = request.app.state.jobs_root
+    job_id = str(request.path_params["job_id"])
+    run_id = int(request.path_params["run_id"])
+    job = _job_entry_by_id(jobs_root, job_id)
+    if job is None:
+        return _json_error(404, "job_not_found")
+    repo_and_conn = _open_repo_if_exists(_db_path_for_job(jobs_root, job_id))
+    if repo_and_conn is None:
+        return _json_error(404, "run_not_found")
+    repo, _ = repo_and_conn
+    try:
+        run = repo.get_run_record(job_id=job_id, run_id=run_id)
+        if run is None:
+            return _json_error(404, "run_not_found")
+        failed_links = repo.list_latest_failed_link_check_results(run_id, limit=200)
+        sources = repo.list_source_page_refs_for_targets(run_id, [row.target_url for row in failed_links])
+        failed_pages = repo.list_crawled_pages(run_id, only_failed=True, limit=200)
+        return JSONResponse(
+            {
+                "job": job,
+                "run": {
+                    "run_id": run.run_id,
+                    "started_at": run.started_at,
+                    "finished_at": run.finished_at,
+                    "pages_visited": run.pages_visited,
+                    "pages_failed": run.pages_failed,
+                    "links_discovered": run.links_discovered,
+                },
+                "failed_links": [
+                    {
+                        "target_url": row.target_url,
+                        "status_code": row.status_code,
+                        "error_category": row.error_category,
+                        "error_message": row.error_message,
+                        "checked_at": row.checked_at,
+                        "source_pages": [ref.source_page_url for ref in sources.get(row.target_url, [])],
+                    }
+                    for row in failed_links
+                ],
+                "failed_pages": [
+                    {
+                        "url": row.url,
+                        "depth": row.depth,
+                        "status_code": row.status_code,
+                        "error_message": row.error_message,
+                        "created_at": row.created_at,
+                    }
+                    for row in failed_pages
+                ],
+            }
+        )
+    finally:
+        _close_repo(repo_and_conn)
+
+
+async def dashboard_results_jobs(request: Request) -> HTMLResponse:
+    payload = (await api_results_jobs(request)).body
+    data = json.loads(payload.decode("utf-8"))
+    jobs = list(data.get("jobs") or [])
+    for job in jobs:
+        job["details_url"] = _path_for(request, "dashboard_results_job", job_id=str(job.get("job_id")))
+    page = render_results_jobs_html(
+        {"jobs": jobs},
+        links={
+            "schedule": _path_for(request, "dashboard_schedule"),
+            "jobs_json": _path_for(request, "api_results_jobs"),
+            "health": _path_for(request, "health"),
+            "refresh": _path_for(request, "dashboard_results_jobs"),
+        },
+    )
+    return HTMLResponse(page)
+
+
+async def dashboard_results_job(request: Request) -> HTMLResponse:
+    jobs_root: Path = request.app.state.jobs_root
+    job_id = str(request.path_params["job_id"])
+    job = _job_entry_by_id(jobs_root, job_id)
+    if job is None:
+        return HTMLResponse("Job not found", status_code=404)
+    repo_and_conn = _open_repo_if_exists(_db_path_for_job(jobs_root, job_id))
+    repo = repo_and_conn[0] if repo_and_conn else None
+    try:
+        run_rows = _serialize_run_history(job_id, repo, limit=100)
+    finally:
+        _close_repo(repo_and_conn)
+    for run in run_rows:
+        run["details_url"] = _path_for(
+            request,
+            "dashboard_results_run",
+            job_id=job_id,
+            run_id=int(run["run_id"]),
+        )
+    page = render_results_job_html(
+        job=job,
+        run_rows=run_rows,
+        links={
+            "jobs_index": _path_for(request, "dashboard_results_jobs"),
+            "runs_json": _path_for(request, "api_results_job_runs", job_id=job_id),
+            "schedule": _path_for(request, "dashboard_schedule"),
+            "refresh": _path_for(request, "dashboard_results_job", job_id=job_id),
+        },
+    )
+    return HTMLResponse(page)
+
+
+async def dashboard_results_run(request: Request) -> HTMLResponse:
+    jobs_root: Path = request.app.state.jobs_root
+    job_id = str(request.path_params["job_id"])
+    run_id = int(request.path_params["run_id"])
+    job = _job_entry_by_id(jobs_root, job_id)
+    if job is None:
+        return HTMLResponse("Job not found", status_code=404)
+    repo_and_conn = _open_repo_if_exists(_db_path_for_job(jobs_root, job_id))
+    if repo_and_conn is None:
+        return HTMLResponse("Run not found", status_code=404)
+    repo, _ = repo_and_conn
+    try:
+        run = repo.get_run_record(job_id=job_id, run_id=run_id)
+        if run is None:
+            return HTMLResponse("Run not found", status_code=404)
+        failed_links = repo.list_latest_failed_link_check_results(run_id, limit=200)
+        failed_pages = repo.list_crawled_pages(run_id, only_failed=True, limit=200)
+        sources = repo.list_source_page_refs_for_targets(run_id, [row.target_url for row in failed_links])
+    finally:
+        _close_repo(repo_and_conn)
+    run_data = {
+        "run_id": run.run_id,
+        "started_at": run.started_at,
+        "finished_at": run.finished_at,
+        "pages_visited": run.pages_visited,
+        "pages_failed": run.pages_failed,
+        "links_discovered": run.links_discovered,
+    }
+    page = render_results_run_html(
+        job=job,
+        run=run_data,
+        failed_links=[
+            {
+                "target_url": row.target_url,
+                "status_code": row.status_code,
+                "error_category": row.error_category,
+                "error_message": row.error_message,
+                "checked_at": row.checked_at,
+                "source_pages": [ref.source_page_url for ref in sources.get(row.target_url, [])],
+            }
+            for row in failed_links
+        ],
+        failed_pages=[
+            {
+                "url": row.url,
+                "depth": row.depth,
+                "status_code": row.status_code,
+                "error_message": row.error_message,
+                "created_at": row.created_at,
+            }
+            for row in failed_pages
+        ],
+        links={
+            "job": _path_for(request, "dashboard_results_job", job_id=job_id),
+            "run_json": _path_for(request, "api_results_run_detail", job_id=job_id, run_id=run_id),
+            "jobs_index": _path_for(request, "dashboard_results_jobs"),
+            "refresh": _path_for(request, "dashboard_results_run", job_id=job_id, run_id=run_id),
+        },
+    )
     return HTMLResponse(page)
 
 
@@ -260,12 +551,38 @@ def build_app(*, jobs_root: Path | None = None, enable_scheduler: bool = False) 
 
     app = Starlette(
         routes=[
-            Route("/health", health, methods=["GET"]),
-            Route("/notifications/slack/health", health, methods=["GET"]),
-            Route("/api/schedule", api_schedule, methods=["GET"]),
-            Route("/dashboard", schedule_dashboard, methods=["GET"]),
-            Route("/notifications/slack/events", slack_events, methods=["POST"]),
-            Route("/notifications/slack/job/{job_slug}", slack_job_event, methods=["POST"]),
+            Route("/health", health, methods=["GET"], name="health"),
+            Route("/notifications/slack/health", health, methods=["GET"], name="slack_health"),
+            Route("/api/schedule", api_schedule, methods=["GET"], name="api_schedule"),
+            Route("/api/results/jobs", api_results_jobs, methods=["GET"], name="api_results_jobs"),
+            Route(
+                "/api/results/jobs/{job_id}/runs",
+                api_results_job_runs,
+                methods=["GET"],
+                name="api_results_job_runs",
+            ),
+            Route(
+                "/api/results/jobs/{job_id}/runs/{run_id:int}",
+                api_results_run_detail,
+                methods=["GET"],
+                name="api_results_run_detail",
+            ),
+            Route("/dashboard", schedule_dashboard, methods=["GET"], name="dashboard_schedule"),
+            Route("/dashboard/results", dashboard_results_jobs, methods=["GET"], name="dashboard_results_jobs"),
+            Route(
+                "/dashboard/results/{job_id}",
+                dashboard_results_job,
+                methods=["GET"],
+                name="dashboard_results_job",
+            ),
+            Route(
+                "/dashboard/results/{job_id}/runs/{run_id:int}",
+                dashboard_results_run,
+                methods=["GET"],
+                name="dashboard_results_run",
+            ),
+            Route("/notifications/slack/events", slack_events, methods=["POST"], name="slack_events"),
+            Route("/notifications/slack/job/{job_slug}", slack_job_event, methods=["POST"], name="slack_job_event"),
         ],
         lifespan=lifespan,
     )

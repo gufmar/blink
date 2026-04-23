@@ -593,6 +593,58 @@ class CrawlRepository:
             for row in rows
         ]
 
+    def list_latest_failed_link_check_results(
+        self,
+        crawl_run_id: int,
+        limit: int = 200,
+    ) -> list[LinkCheckResultRecord]:
+        rows = self._connection.execute(
+            """
+            SELECT
+                l.id,
+                l.crawl_link_id,
+                l.crawl_run_id,
+                l.target_url,
+                l.status_code,
+                l.ok,
+                l.error_message,
+                l.checked_at,
+                l.error_category,
+                l.decision_state,
+                l.ignore_rule_id,
+                l.decision_reason
+            FROM link_check_results l
+            JOIN (
+                SELECT target_url, MAX(id) AS max_id
+                FROM link_check_results
+                WHERE crawl_run_id = ?
+                GROUP BY target_url
+            ) latest ON latest.max_id = l.id
+            WHERE l.crawl_run_id = ?
+              AND l.ok = 0
+            ORDER BY l.checked_at DESC, l.target_url ASC
+            LIMIT ?
+            """,
+            (crawl_run_id, crawl_run_id, limit),
+        ).fetchall()
+        return [
+            LinkCheckResultRecord(
+                row_id=int(row["id"]),
+                crawl_link_id=int(row["crawl_link_id"]),
+                crawl_run_id=int(row["crawl_run_id"]),
+                target_url=str(row["target_url"]),
+                status_code=int(row["status_code"]) if row["status_code"] is not None else None,
+                ok=bool(row["ok"]),
+                error_message=str(row["error_message"]) if row["error_message"] is not None else None,
+                checked_at=str(row["checked_at"]),
+                error_category=str(row["error_category"]) if row["error_category"] is not None else None,
+                decision_state=str(row["decision_state"]) if row["decision_state"] is not None else None,
+                ignore_rule_id=int(row["ignore_rule_id"]) if row["ignore_rule_id"] is not None else None,
+                decision_reason=str(row["decision_reason"]) if row["decision_reason"] is not None else None,
+            )
+            for row in rows
+        ]
+
     def list_source_page_refs_for_targets(self, run_id: int, target_urls: list[str]) -> dict[str, list[ExternalLinkSourceRefRecord]]:
         if not target_urls:
             return {}
@@ -1662,6 +1714,33 @@ class CrawlRepository:
             )
             for row in rows
         ]
+
+    def get_run_record(self, *, job_id: str, run_id: int) -> CrawlRunRecord | None:
+        row = self._connection.execute(
+            """
+            SELECT
+                id,
+                started_at,
+                finished_at,
+                pages_visited,
+                pages_failed,
+                links_discovered
+            FROM crawl_runs
+            WHERE job_id = ? AND id = ?
+            LIMIT 1
+            """,
+            (job_id, run_id),
+        ).fetchone()
+        if row is None:
+            return None
+        return CrawlRunRecord(
+            run_id=int(row["id"]),
+            started_at=str(row["started_at"]),
+            finished_at=str(row["finished_at"]) if row["finished_at"] is not None else None,
+            pages_visited=int(row["pages_visited"]),
+            pages_failed=int(row["pages_failed"]),
+            links_discovered=int(row["links_discovered"]),
+        )
 
     def list_crawled_pages(
         self,

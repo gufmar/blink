@@ -1,4 +1,4 @@
-"""HTML for the scheduler dashboard (proxy-safe relative links, no static assets)."""
+"""HTML for scheduler/results dashboards (proxy-safe and route-aware)."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 
-def render_schedule_dashboard_html(payload: dict[str, Any]) -> str:
-    """Build dashboard HTML. Navigation uses ``../`` so links work behind path prefixes (e.g. ``/blink``)."""
+def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, str]) -> str:
+    """Build scheduler dashboard HTML using request-aware links."""
     tasks: list[dict[str, Any]] = list(payload.get("tasks") or [])
     crawl_n = len(payload.get("crawl_tasks") or [])
     link_n = len(payload.get("link_check_tasks") or [])
@@ -23,8 +23,15 @@ def render_schedule_dashboard_html(payload: dict[str, Any]) -> str:
         rt = t.get("runtime") or {}
         dec = t.get("declarative") or {}
         cadence = f'{esc(dec.get("mode", ""))} · {esc(dec.get("expression", ""))}'
+        job_id = esc(t.get("job_id", ""))
+        results_url = str(t.get("results_url") or "")
+        job_cell = (
+            f'<a href="{esc(results_url)}" class="mono" title="Open job results">{job_id}</a>'
+            if results_url
+            else f'<span class="mono">{job_id}</span>'
+        )
         return f"""<tr>
-    <td class="mono">{esc(t.get("job_id", ""))}</td>
+    <td>{job_cell}</td>
     <td><span class="badge badge-{esc(t.get("task_type", ""))}">{esc(t.get("task_type", ""))}</span></td>
     <td class="mono cadence">{cadence}</td>
     <td class="mono time">{esc(rt.get("next_run_at") or "—")}</td>
@@ -245,9 +252,10 @@ def render_schedule_dashboard_html(payload: dict[str, Any]) -> str:
       <h1>Blink schedules</h1>
       <p>Scheduled crawl and link-check tasks — next run, last run, and status at a glance.</p>
       <nav class="nav" aria-label="Endpoints">
-        <a href="../health">Health</a>
-        <a href="../api/schedule">Schedule JSON</a>
-        <a href="../notifications/slack/health">Slack health</a>
+        <a href="{esc(links.get("health", ""))}">Health</a>
+        <a href="{esc(links.get("schedule_json", ""))}">Schedule JSON</a>
+        <a href="{esc(links.get("slack_health", ""))}">Slack health</a>
+        <a href="{esc(links.get("results_index", ""))}">Results</a>
       </nav>
     </div>
   </header>
@@ -292,7 +300,7 @@ def render_schedule_dashboard_html(payload: dict[str, Any]) -> str:
         </tbody>
       </table>
     </section>
-    <footer>Generated {esc(gen_at)} · <a href="../dashboard">Refresh</a></footer>
+    <footer>Generated {esc(gen_at)} · <a href="{esc(links.get("schedule_refresh", ""))}">Refresh</a></footer>
   </div>
 </body>
 </html>
@@ -315,3 +323,264 @@ def _status_cell(rt: dict[str, Any]) -> str:
     if int(code) == 0:
         return '<span class="dot dot-ok"></span>OK'
     return '<span class="dot dot-fail"></span>Failed'
+
+
+def render_results_jobs_html(payload: dict[str, Any], *, links: dict[str, str]) -> str:
+    """Render job list + latest run summary."""
+    jobs = list(payload.get("jobs") or [])
+
+    def row_for(job: dict[str, Any]) -> str:
+        latest = job.get("latest_run") or {}
+        return f"""<tr>
+    <td class="mono"><a href="{esc(job.get("details_url", ""))}">{esc(job.get("job_id", ""))}</a></td>
+    <td>{esc(job.get("name", ""))}</td>
+    <td>{esc("yes" if job.get("enabled") else "no")}</td>
+    <td class="mono">{esc(latest.get("run_id") if latest else "—")}</td>
+    <td class="mono">{esc(latest.get("started_at") if latest else "—")}</td>
+    <td class="mono">{esc(latest.get("pages_failed") if latest else "—")}</td>
+    <td class="mono">{esc(latest.get("links_discovered") if latest else "—")}</td>
+  </tr>"""
+
+    rows = "\n".join(row_for(job) for job in jobs) if jobs else ""
+    empty_row = '<tr><td colspan="7" class="empty">No job files found.</td></tr>'
+    return _render_results_shell(
+        title="Blink results · Jobs",
+        heading="Blink results",
+        subtitle="Browse jobs and recent crawl/link-check outcomes.",
+        nav_links=[
+            ("Schedule", links.get("schedule", "")),
+            ("Jobs JSON", links.get("jobs_json", "")),
+            ("Health", links.get("health", "")),
+        ],
+        panel_title="Jobs overview",
+        table_headers=["Job", "Name", "Enabled", "Latest run", "Started", "Pages failed", "Links discovered"],
+        table_rows=rows if rows else empty_row,
+        footer_link=links.get("refresh", ""),
+        footer_label="Refresh",
+    )
+
+
+def render_results_job_html(
+    *,
+    job: dict[str, Any],
+    run_rows: list[dict[str, Any]],
+    links: dict[str, str],
+) -> str:
+    """Render one job's run history table."""
+
+    def row_for(run: dict[str, Any]) -> str:
+        return f"""<tr>
+    <td class="mono"><a href="{esc(run.get("details_url", ""))}">{esc(run.get("run_id", ""))}</a></td>
+    <td class="mono">{esc(run.get("started_at") or "—")}</td>
+    <td class="mono">{esc(run.get("finished_at") or "—")}</td>
+    <td class="mono">{esc(run.get("pages_visited"))}</td>
+    <td class="mono">{esc(run.get("pages_failed"))}</td>
+    <td class="mono">{esc(run.get("links_discovered"))}</td>
+  </tr>"""
+
+    rows = "\n".join(row_for(run) for run in run_rows) if run_rows else ""
+    empty_row = '<tr><td colspan="6" class="empty">No runs available for this job yet.</td></tr>'
+    return _render_results_shell(
+        title=f"Blink results · {esc(job.get('job_id', 'job'))}",
+        heading=f"Job results · {esc(job.get('job_id', ''))}",
+        subtitle=f"{esc(job.get('name', ''))} ({esc('enabled' if job.get('enabled') else 'disabled')})",
+        nav_links=[
+            ("Back to jobs", links.get("jobs_index", "")),
+            ("Runs JSON", links.get("runs_json", "")),
+            ("Schedule", links.get("schedule", "")),
+        ],
+        panel_title="Run history",
+        table_headers=["Run", "Started", "Finished", "Pages visited", "Pages failed", "Links discovered"],
+        table_rows=rows if rows else empty_row,
+        footer_link=links.get("refresh", ""),
+        footer_label="Refresh",
+    )
+
+
+def render_results_run_html(
+    *,
+    job: dict[str, Any],
+    run: dict[str, Any],
+    failed_links: list[dict[str, Any]],
+    failed_pages: list[dict[str, Any]],
+    links: dict[str, str],
+) -> str:
+    """Render one run's crawl/link-check details."""
+
+    run_stats = f"""
+<section class="metrics" aria-label="Run summary">
+  <div class="metric"><div class="value">{esc(run.get("run_id"))}</div><div class="label">Run id</div></div>
+  <div class="metric"><div class="value">{esc(run.get("pages_visited"))}</div><div class="label">Pages visited</div></div>
+  <div class="metric"><div class="value">{esc(run.get("pages_failed"))}</div><div class="label">Pages failed</div></div>
+  <div class="metric"><div class="value">{esc(run.get("links_discovered"))}</div><div class="label">Links discovered</div></div>
+</section>
+"""
+
+    failed_link_rows = "\n".join(
+        f"""<tr>
+    <td class="mono">{esc(item.get("target_url", ""))}</td>
+    <td class="mono">{esc(item.get("status_code") if item.get("status_code") is not None else "—")}</td>
+    <td>{esc(item.get("error_category") or "—")}</td>
+    <td>{esc(item.get("error_message") or "—")}</td>
+    <td class="mono">{esc(item.get("checked_at") or "—")}</td>
+    <td>{esc("; ".join(item.get("source_pages") or []) or "—")}</td>
+  </tr>"""
+        for item in failed_links
+    )
+    if not failed_link_rows:
+        failed_link_rows = '<tr><td colspan="6" class="empty">No failed links for this run.</td></tr>'
+
+    failed_page_rows = "\n".join(
+        f"""<tr>
+    <td class="mono">{esc(item.get("url", ""))}</td>
+    <td class="mono">{esc(item.get("depth", ""))}</td>
+    <td class="mono">{esc(item.get("status_code") if item.get("status_code") is not None else "—")}</td>
+    <td>{esc(item.get("error_message") or "—")}</td>
+    <td class="mono">{esc(item.get("created_at") or "—")}</td>
+  </tr>"""
+        for item in failed_pages
+    )
+    if not failed_page_rows:
+        failed_page_rows = '<tr><td colspan="5" class="empty">No failed crawl pages for this run.</td></tr>'
+
+    body_extra = f"""
+{run_stats}
+<section class="panel" aria-label="Failed links">
+  <div class="panel-head">Failed link-check results (latest per target)</div>
+  <table>
+    <thead>
+      <tr><th>Target URL</th><th>Status</th><th>Category</th><th>Error</th><th>Checked at</th><th>Source pages</th></tr>
+    </thead>
+    <tbody>{failed_link_rows}</tbody>
+  </table>
+</section>
+<section class="panel" aria-label="Failed crawl pages" style="margin-top: 1rem;">
+  <div class="panel-head">Failed crawl pages</div>
+  <table>
+    <thead>
+      <tr><th>URL</th><th>Depth</th><th>Status</th><th>Error</th><th>Created</th></tr>
+    </thead>
+    <tbody>{failed_page_rows}</tbody>
+  </table>
+</section>
+"""
+    return _render_results_shell(
+        title=f"Blink results · {esc(job.get('job_id', ''))} run {esc(run.get('run_id', ''))}",
+        heading=f"Run detail · {esc(job.get('job_id', ''))} / {esc(run.get('run_id', ''))}",
+        subtitle=f"Started {esc(run.get('started_at') or '—')} · Finished {esc(run.get('finished_at') or '—')}",
+        nav_links=[
+            ("Back to job", links.get("job", "")),
+            ("Run JSON", links.get("run_json", "")),
+            ("Jobs", links.get("jobs_index", "")),
+        ],
+        panel_title="Overview",
+        table_headers=["Field", "Value"],
+        table_rows=(
+            f"<tr><td>job_id</td><td class=\"mono\">{esc(job.get('job_id', ''))}</td></tr>"
+            f"<tr><td>job_name</td><td>{esc(job.get('name', ''))}</td></tr>"
+            f"<tr><td>run_id</td><td class=\"mono\">{esc(run.get('run_id', ''))}</td></tr>"
+        ),
+        footer_link=links.get("refresh", ""),
+        footer_label="Refresh",
+        body_extra=body_extra,
+    )
+
+
+def _render_results_shell(
+    *,
+    title: str,
+    heading: str,
+    subtitle: str,
+    nav_links: list[tuple[str, str]],
+    panel_title: str,
+    table_headers: list[str],
+    table_rows: str,
+    footer_link: str,
+    footer_label: str,
+    body_extra: str = "",
+) -> str:
+    nav_html = "\n".join(f'<a href="{esc(href)}">{esc(label)}</a>' for label, href in nav_links if href)
+    headers_html = "".join(f"<th>{esc(h)}</th>" for h in table_headers)
+    gen_at = datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>{esc(title)}</title>
+  {_shared_styles()}
+</head>
+<body>
+  <header class="hero">
+    <div class="hero-inner">
+      <h1>{esc(heading)}</h1>
+      <p>{esc(subtitle)}</p>
+      <nav class="nav" aria-label="Endpoints">
+        {nav_html}
+      </nav>
+    </div>
+  </header>
+  <div class="wrap">
+    <section class="panel" aria-label="Main table">
+      <div class="panel-head">{esc(panel_title)}</div>
+      <table>
+        <thead><tr>{headers_html}</tr></thead>
+        <tbody>{table_rows}</tbody>
+      </table>
+    </section>
+    {body_extra}
+    <footer>Generated {esc(gen_at)} · <a href="{esc(footer_link)}">{esc(footer_label)}</a></footer>
+  </div>
+</body>
+</html>
+"""
+
+
+def _shared_styles() -> str:
+    return """
+<style>
+  :root {
+    --cardano-blue: #121f63;
+    --cardano-blue-light: #1e3a8a;
+    --surface: #f4f6fb;
+    --card: #ffffff;
+    --text: #1e293b;
+    --muted: #64748b;
+    --border: #e2e8f0;
+    --success: #059669;
+    --danger: #dc2626;
+    --warn: #d97706;
+    --radius: 12px;
+    --shadow: 0 4px 24px rgba(18, 31, 99, 0.08);
+    --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: var(--font); background: var(--surface); color: var(--text); line-height: 1.5; min-height: 100vh; }
+  .hero { background: linear-gradient(135deg, var(--cardano-blue) 0%, var(--cardano-blue-light) 100%); color: #fff; padding: 2rem 1.5rem 2.25rem; box-shadow: var(--shadow); }
+  .hero-inner { max-width: 1200px; margin: 0 auto; }
+  .hero h1 { margin: 0 0 0.35rem; font-size: 1.65rem; font-weight: 700; letter-spacing: -0.02em; }
+  .hero p { margin: 0; opacity: 0.92; font-size: 0.95rem; max-width: 42rem; }
+  .nav { margin-top: 1rem; display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; font-size: 0.875rem; }
+  .nav a { color: #fff; opacity: 0.95; text-decoration: underline; text-underline-offset: 3px; }
+  .nav a:hover { opacity: 1; }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
+  .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; margin-bottom: 1rem; }
+  .metric { background: var(--card); border-radius: var(--radius); padding: 1.15rem 1.25rem; box-shadow: var(--shadow); border: 1px solid var(--border); }
+  .metric .value { font-size: 1.75rem; font-weight: 700; color: var(--cardano-blue); letter-spacing: -0.03em; }
+  .metric .label { font-size: 0.8rem; color: var(--muted); margin-top: 0.25rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  .panel { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); border: 1px solid var(--border); overflow: hidden; }
+  .panel-head { padding: 1rem 1.25rem; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 1rem; color: var(--cardano-blue); }
+  table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
+  th { text-align: left; padding: 0.65rem 1rem; background: #f8fafc; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; font-size: 0.7rem; border-bottom: 1px solid var(--border); }
+  td { padding: 0.65rem 1rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  tr:nth-child(even) td { background: #fafbfd; }
+  tr:last-child td { border-bottom: none; }
+  td.empty { text-align: center; color: var(--muted); padding: 2rem; }
+  .mono { font-family: ui-monospace, "Cascadia Code", "SF Mono", Menlo, monospace; font-size: 0.78rem; }
+  footer { margin-top: 2rem; padding: 1rem 0; font-size: 0.75rem; color: var(--muted); text-align: center; }
+</style>
+"""
+
+
+def esc(s: object) -> str:
+    return html.escape("" if s is None else str(s))
