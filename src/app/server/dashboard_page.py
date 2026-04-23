@@ -369,9 +369,10 @@ def render_results_job_html(
     """Render one job's run history table."""
 
     def row_for(run: dict[str, Any]) -> str:
+        started = esc(run.get("started_at") or "—")
         return f"""<tr>
-    <td class="mono"><a href="{esc(run.get("details_url", ""))}">{esc(run.get("run_id", ""))}</a></td>
-    <td class="mono">{esc(run.get("started_at") or "—")}</td>
+    <td class="mono"><a href="{esc(run.get("details_url", ""))}">{started}</a></td>
+    <td class="mono">{esc(run.get("run_id", ""))}</td>
     <td class="mono">{esc(run.get("finished_at") or "—")}</td>
     <td class="mono">{esc(run.get("pages_visited"))}</td>
     <td class="mono">{esc(run.get("pages_failed"))}</td>
@@ -390,7 +391,7 @@ def render_results_job_html(
             ("Schedule", links.get("schedule", "")),
         ],
         panel_title="Run history",
-        table_headers=["Run", "Started", "Finished", "Pages visited", "Pages failed", "Links discovered"],
+        table_headers=["Started", "Run id", "Finished", "Pages visited", "Pages failed", "Links discovered"],
         table_rows=rows if rows else empty_row,
         footer_link=links.get("refresh", ""),
         footer_label="Refresh",
@@ -401,29 +402,60 @@ def render_results_run_html(
     *,
     job: dict[str, Any],
     run: dict[str, Any],
+    totals: dict[str, int],
+    failed_summary: dict[str, Any],
+    filters: dict[str, Any],
     failed_links: list[dict[str, Any]],
     failed_pages: list[dict[str, Any]],
+    ignored_links: list[dict[str, Any]],
     links: dict[str, str],
 ) -> str:
     """Render one run's crawl/link-check details."""
 
     run_stats = f"""
 <section class="metrics" aria-label="Run summary">
-  <div class="metric"><div class="value">{esc(run.get("run_id"))}</div><div class="label">Run id</div></div>
+  <div class="metric"><div class="value">{esc(run.get("started_at") or "—")}</div><div class="label">Run start</div></div>
+  <div class="metric"><div class="value">{esc(run.get("finished_at") or "—")}</div><div class="label">Run end</div></div>
   <div class="metric"><div class="value">{esc(run.get("pages_visited"))}</div><div class="label">Pages visited</div></div>
-  <div class="metric"><div class="value">{esc(run.get("pages_failed"))}</div><div class="label">Pages failed</div></div>
-  <div class="metric"><div class="value">{esc(run.get("links_discovered"))}</div><div class="label">Links discovered</div></div>
+  <div class="metric"><div class="value">{esc(totals.get("pages_total"))}</div><div class="label">Pages covered by job</div></div>
+  <div class="metric"><div class="value">{esc(totals.get("external_links_total"))}</div><div class="label">Individual external links</div></div>
+  <div class="metric"><div class="value">{esc(failed_summary.get("failed_total"))}</div><div class="label">Failed external links</div></div>
 </section>
 """
 
+    category_rows = "".join(
+        f"<tr><td>{esc(category)}</td><td class=\"mono\">{esc(count)}</td></tr>"
+        for category, count in sorted((failed_summary.get("by_category") or {}).items())
+    )
+    if not category_rows:
+        category_rows = '<tr><td colspan="2" class="empty">No failed external links in this run.</td></tr>'
+
+    status_options = list(filters.get("status_options") or [])
+    category_options = list(filters.get("category_options") or [])
+    selected_status = str(filters.get("status") or "")
+    selected_category = str(filters.get("category") or "")
+    filter_action = esc(filters.get("filter_action") or "")
+    clear_filters_url = esc(filters.get("clear_filters_url") or "")
+
+    status_option_html = ['<option value="">All statuses</option>']
+    status_option_html.extend(
+        f"<option value=\"{esc(v)}\"{' selected' if v == selected_status else ''}>{esc(v)}</option>"
+        for v in status_options
+    )
+    category_option_html = ['<option value="">All categories</option>']
+    category_option_html.extend(
+        f"<option value=\"{esc(v)}\"{' selected' if v == selected_category else ''}>{esc(v)}</option>"
+        for v in category_options
+    )
+
     failed_link_rows = "\n".join(
         f"""<tr>
-    <td class="mono">{esc(item.get("target_url", ""))}</td>
+    <td class="mono"><a href="{esc(item.get("target_href", item.get("target_url", "")))}" target="_blank" rel="noopener noreferrer">{esc(item.get("target_url", ""))}</a></td>
     <td class="mono">{esc(item.get("status_code") if item.get("status_code") is not None else "—")}</td>
     <td>{esc(item.get("error_category") or "—")}</td>
     <td>{esc(item.get("error_message") or "—")}</td>
     <td class="mono">{esc(item.get("checked_at") or "—")}</td>
-    <td>{esc("; ".join(item.get("source_pages") or []) or "—")}</td>
+    <td class="source-col">{_render_link_list(item.get("source_page_hrefs") or item.get("source_pages") or [])}</td>
   </tr>"""
         for item in failed_links
     )
@@ -443,16 +475,47 @@ def render_results_run_html(
     if not failed_page_rows:
         failed_page_rows = '<tr><td colspan="5" class="empty">No failed crawl pages for this run.</td></tr>'
 
+    ignored_link_rows = "\n".join(
+        f"""<tr>
+    <td class="mono"><a href="{esc(item.get("target_href", item.get("target_url", "")))}" target="_blank" rel="noopener noreferrer">{esc(item.get("target_url", ""))}</a></td>
+    <td class="source-col">{_render_link_list(item.get("source_page_hrefs") or item.get("source_pages") or [])}</td>
+  </tr>"""
+        for item in ignored_links
+    )
+    if not ignored_link_rows:
+        ignored_link_rows = '<tr><td colspan="2" class="empty">No ignored external links matched for this run.</td></tr>'
+
     body_extra = f"""
 {run_stats}
+<section class="panel" aria-label="Failed by category">
+  <div class="panel-head">Failed external links by error category</div>
+  <table>
+    <thead><tr><th>Error category</th><th>Count</th></tr></thead>
+    <tbody>{category_rows}</tbody>
+  </table>
+</section>
 <section class="panel" aria-label="Failed links">
   <div class="panel-head">Failed link-check results (latest per target)</div>
-  <table>
+  <div class="filters-row">
+    <form method="get" action="{filter_action}" class="filters-form">
+      <label>Status
+        <select name="status">{''.join(status_option_html)}</select>
+      </label>
+      <label>Category
+        <select name="category">{''.join(category_option_html)}</select>
+      </label>
+      <button type="submit">Apply filters</button>
+      <a href="{clear_filters_url}">Clear</a>
+    </form>
+  </div>
+  <div class="table-scroll">
+  <table class="sticky-head">
     <thead>
       <tr><th>Target URL</th><th>Status</th><th>Category</th><th>Error</th><th>Checked at</th><th>Source pages</th></tr>
     </thead>
     <tbody>{failed_link_rows}</tbody>
   </table>
+  </div>
 </section>
 <section class="panel" aria-label="Failed crawl pages" style="margin-top: 1rem;">
   <div class="panel-head">Failed crawl pages</div>
@@ -463,10 +526,17 @@ def render_results_run_html(
     <tbody>{failed_page_rows}</tbody>
   </table>
 </section>
+<section class="panel" aria-label="Ignored external links" style="margin-top: 1rem;">
+  <div class="panel-head">Ignored external links (from job ignore rules)</div>
+  <table>
+    <thead><tr><th>Target URL</th><th>Source pages</th></tr></thead>
+    <tbody>{ignored_link_rows}</tbody>
+  </table>
+</section>
 """
     return _render_results_shell(
         title=f"Blink results · {esc(job.get('job_id', ''))} run {esc(run.get('run_id', ''))}",
-        heading=f"Run detail · {esc(job.get('job_id', ''))} / {esc(run.get('run_id', ''))}",
+        heading=f"Run detail · {esc(job.get('job_id', ''))}",
         subtitle=f"Started {esc(run.get('started_at') or '—')} · Finished {esc(run.get('finished_at') or '—')}",
         nav_links=[
             ("Back to job", links.get("job", "")),
@@ -478,7 +548,8 @@ def render_results_run_html(
         table_rows=(
             f"<tr><td>job_id</td><td class=\"mono\">{esc(job.get('job_id', ''))}</td></tr>"
             f"<tr><td>job_name</td><td>{esc(job.get('name', ''))}</td></tr>"
-            f"<tr><td>run_id</td><td class=\"mono\">{esc(run.get('run_id', ''))}</td></tr>"
+            f"<tr><td>run_start</td><td class=\"mono\">{esc(run.get('started_at') or '—')}</td></tr>"
+            f"<tr><td>run_end</td><td class=\"mono\">{esc(run.get('finished_at') or '—')}</td></tr>"
         ),
         footer_link=links.get("refresh", ""),
         footer_label="Refresh",
@@ -576,6 +647,13 @@ def _shared_styles() -> str:
   tr:nth-child(even) td { background: #fafbfd; }
   tr:last-child td { border-bottom: none; }
   td.empty { text-align: center; color: var(--muted); padding: 2rem; }
+  .source-col { min-width: 28rem; }
+  .filters-row { padding: 0.75rem 1rem; border-bottom: 1px solid var(--border); background: #fff; }
+  .filters-form { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+  .filters-form label { font-size: 0.8rem; color: var(--muted); }
+  .filters-form select { margin-left: 0.35rem; }
+  .table-scroll { max-height: 28rem; overflow: auto; }
+  .sticky-head thead th { position: sticky; top: 0; z-index: 1; }
   .mono { font-family: ui-monospace, "Cascadia Code", "SF Mono", Menlo, monospace; font-size: 0.78rem; }
   footer { margin-top: 2rem; padding: 1rem 0; font-size: 0.75rem; color: var(--muted); text-align: center; }
 </style>
@@ -584,3 +662,12 @@ def _shared_styles() -> str:
 
 def esc(s: object) -> str:
     return html.escape("" if s is None else str(s))
+
+
+def _render_link_list(urls: list[str]) -> str:
+    if not urls:
+        return "—"
+    return "<br/>".join(
+        f'<a href="{esc(url)}" target="_blank" rel="noopener noreferrer">{esc(url)}</a>'
+        for url in urls
+    )

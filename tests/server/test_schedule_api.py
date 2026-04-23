@@ -54,3 +54,13 @@ def test_dashboard_links_honor_proxy_root_path(tmp_path: Path) -> None:
     assert r.status_code == 200
     assert "/blink/dashboard/results" in r.text
     assert "/blink/api/schedule" in r.text
+
+
+def test_dashboard_links_honor_configured_base_path(tmp_path: Path) -> None:
+    _minimal_job(tmp_path)
+    app = build_app(jobs_root=tmp_path, route_base_path="/blink")
+    client = TestClient(app)
+    r = client.get("/dashboard")
+    assert r.status_code == 200
+    assert "/blink/dashboard/results" in r.text
+    assert "/blink/api/schedule" in r.text

@@ -68,6 +68,11 @@ def serve_main(
         "--jobs-root",
         help="Directory containing <slug>.job.json files (default: <project>/jobs).",
     ),
+    base_path: str = typer.Option(
+        "",
+        "--base-path",
+        help="Optional URL base path prefix for generated dashboard links (example: /blink).",
+    ),
 ) -> None:
     """Start uvicorn with Slack Events routes under /notifications/slack/."""
     try:
@@ -85,12 +90,12 @@ def serve_main(
 
     root = jobs_root.resolve() if jobs_root is not None else project_root() / "jobs"
     _emit_env_diagnostics(root)
-    app = build_app(jobs_root=root, enable_scheduler=True)
+    app = build_app(jobs_root=root, enable_scheduler=True, route_base_path=base_path)
     routes = getattr(app.state, "channel_routes", {})
     if isinstance(routes, dict):
         _emit_route_registry_diagnostics(routes)
     typer.secho(
-        f"Blink server listening on http://{host}:{port} (jobs_root={root})",
+        f"Blink server listening on http://{host}:{port} (jobs_root={root}, base_path={base_path or '/'})",
         fg=typer.colors.GREEN,
     )
     uvicorn.run(app, host=host, port=port, log_level="info")

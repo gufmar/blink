@@ -9,6 +9,7 @@ import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -52,8 +53,33 @@ async def api_schedule(request: Request) -> JSONResponse:
     return JSONResponse(svc.build_schedule_payload())
 
 
+def _normalize_base_path(value: str | None) -> str:
+    if not value:
+        return ""
+    trimmed = value.strip().strip("/")
+    return f"/{trimmed}" if trimmed else ""
+
+
+def _join_url_paths(*parts: str) -> str:
+    cleaned: list[str] = []
+    for part in parts:
+        if not part:
+            continue
+        chunk = str(part).strip("/")
+        if chunk:
+            cleaned.append(chunk)
+    if not cleaned:
+        return "/"
+    return "/" + "/".join(cleaned)
+
+
 def _path_for(request: Request, route_name: str, **path_params: object) -> str:
-    return str(request.url_for(route_name, **path_params))
+    app_path = str(request.app.url_path_for(route_name, **path_params))
+    root_path = _normalize_base_path(str(request.scope.get("root_path") or ""))
+    config_base = _normalize_base_path(getattr(request.app.state, "route_base_path", ""))
+    if config_base and root_path.startswith(config_base):
+        config_base = ""
+    return _join_url_paths(config_base, root_path, app_path)
 
 
 def _load_job_entries(jobs_root: Path) -> list[dict[str, Any]]:
@@ -191,9 +217,36 @@ async def api_results_run_detail(request: Request) -> JSONResponse:
         run = repo.get_run_record(job_id=job_id, run_id=run_id)
         if run is None:
             return _json_error(404, "run_not_found")
-        failed_links = repo.list_latest_failed_link_check_results(run_id, limit=200)
+        status_filter = str(request.query_params.get("status") or "").strip()
+        category_filter = str(request.query_params.get("category") or "").strip()
+
+        failed_links_all = repo.list_latest_failed_link_check_results(run_id, limit=2000)
+        failed_links: list[Any] = []
+        for row in failed_links_all:
+            if status_filter:
+                status_value = "none" if row.status_code is None else str(row.status_code)
+                if status_value != status_filter:
+                    continue
+            if category_filter:
+                category_value = str(row.error_category or "uncategorized")
+                if category_value != category_filter:
+                    continue
+            failed_links.append(row)
+
         sources = repo.list_source_page_refs_for_targets(run_id, [row.target_url for row in failed_links])
         failed_pages = repo.list_crawled_pages(run_id, only_failed=True, limit=200)
+        counts = repo.get_distinct_link_counts()
+        category_counts: dict[str, int] = {}
+        for row in failed_links_all:
+            key = str(row.error_category or "uncategorized")
+            category_counts[key] = category_counts.get(key, 0) + 1
+        ignored_impacts = repo.list_ignore_rule_impacts(job_id=job_id, run_id=run_id, active_only=True, limit=2000)
+        ignored_by_target: dict[str, list[str]] = {}
+        for impact in ignored_impacts:
+            if impact.target_url not in ignored_by_target:
+                ignored_by_target[impact.target_url] = []
+            if impact.source_page_url and impact.source_page_url not in ignored_by_target[impact.target_url]:
+                ignored_by_target[impact.target_url].append(impact.source_page_url)
         return JSONResponse(
             {
                 "job": job,
@@ -204,6 +257,18 @@ async def api_results_run_detail(request: Request) -> JSONResponse:
                     "pages_visited": run.pages_visited,
                     "pages_failed": run.pages_failed,
                     "links_discovered": run.links_discovered,
+                },
+                "job_totals": {
+                    "pages_total": counts["internal_urls_distinct"],
+                    "external_links_total": counts["external_urls_distinct"],
+                },
+                "failed_overview": {
+                    "failed_total": len(failed_links_all),
+                    "by_category": category_counts,
+                },
+                "filters": {
+                    "status": status_filter,
+                    "category": category_filter,
                 },
                 "failed_links": [
                     {
@@ -225,6 +290,13 @@ async def api_results_run_detail(request: Request) -> JSONResponse:
                         "created_at": row.created_at,
                     }
                     for row in failed_pages
+                ],
+                "ignored_links": [
+                    {
+                        "target_url": target_url,
+                        "source_pages": source_pages,
+                    }
+                    for target_url, source_pages in sorted(ignored_by_target.items())
                 ],
             }
         )
@@ -297,11 +369,52 @@ async def dashboard_results_run(request: Request) -> HTMLResponse:
         run = repo.get_run_record(job_id=job_id, run_id=run_id)
         if run is None:
             return HTMLResponse("Run not found", status_code=404)
-        failed_links = repo.list_latest_failed_link_check_results(run_id, limit=200)
+        status_filter = str(request.query_params.get("status") or "").strip()
+        category_filter = str(request.query_params.get("category") or "").strip()
+        failed_links_all = repo.list_latest_failed_link_check_results(run_id, limit=2000)
+        failed_links: list[Any] = []
+        for row in failed_links_all:
+            if status_filter:
+                status_value = "none" if row.status_code is None else str(row.status_code)
+                if status_value != status_filter:
+                    continue
+            if category_filter:
+                category_value = str(row.error_category or "uncategorized")
+                if category_value != category_filter:
+                    continue
+            failed_links.append(row)
         failed_pages = repo.list_crawled_pages(run_id, only_failed=True, limit=200)
         sources = repo.list_source_page_refs_for_targets(run_id, [row.target_url for row in failed_links])
+        counts = repo.get_distinct_link_counts()
+        category_counts: dict[str, int] = {}
+        status_options: set[str] = set()
+        category_options: set[str] = set()
+        for row in failed_links_all:
+            category_key = str(row.error_category or "uncategorized")
+            category_counts[category_key] = category_counts.get(category_key, 0) + 1
+            status_options.add("none" if row.status_code is None else str(row.status_code))
+            category_options.add(category_key)
+        ignored_impacts = repo.list_ignore_rule_impacts(job_id=job_id, run_id=run_id, active_only=True, limit=2000)
+        ignored_by_target: dict[str, list[str]] = {}
+        for impact in ignored_impacts:
+            if impact.target_url not in ignored_by_target:
+                ignored_by_target[impact.target_url] = []
+            if impact.source_page_url and impact.source_page_url not in ignored_by_target[impact.target_url]:
+                ignored_by_target[impact.target_url].append(impact.source_page_url)
     finally:
         _close_repo(repo_and_conn)
+
+    def with_filters(path: str, *, status: str, category: str) -> str:
+        query_items: list[tuple[str, str]] = []
+        if status:
+            query_items.append(("status", status))
+        if category:
+            query_items.append(("category", category))
+        if not query_items:
+            return path
+        return f"{path}?{urlencode(query_items)}"
+
+    base_run_path = _path_for(request, "dashboard_results_run", job_id=job_id, run_id=run_id)
     run_data = {
         "run_id": run.run_id,
         "started_at": run.started_at,
@@ -313,6 +426,22 @@ async def dashboard_results_run(request: Request) -> HTMLResponse:
     page = render_results_run_html(
         job=job,
         run=run_data,
+        totals={
+            "pages_total": counts["internal_urls_distinct"],
+            "external_links_total": counts["external_urls_distinct"],
+        },
+        failed_summary={
+            "failed_total": len(failed_links_all),
+            "by_category": category_counts,
+        },
+        filters={
+            "status": status_filter,
+            "category": category_filter,
+            "status_options": sorted(status_options),
+            "category_options": sorted(category_options),
+            "filter_action": base_run_path,
+            "clear_filters_url": base_run_path,
+        },
         failed_links=[
             {
                 "target_url": row.target_url,
@@ -321,6 +450,8 @@ async def dashboard_results_run(request: Request) -> HTMLResponse:
                 "error_message": row.error_message,
                 "checked_at": row.checked_at,
                 "source_pages": [ref.source_page_url for ref in sources.get(row.target_url, [])],
+                "target_href": row.target_url,
+                "source_page_hrefs": [ref.source_page_url for ref in sources.get(row.target_url, [])],
             }
             for row in failed_links
         ],
@@ -334,11 +465,24 @@ async def dashboard_results_run(request: Request) -> HTMLResponse:
             }
             for row in failed_pages
         ],
+        ignored_links=[
+            {
+                "target_url": target_url,
+                "target_href": target_url,
+                "source_pages": source_pages,
+                "source_page_hrefs": source_pages,
+            }
+            for target_url, source_pages in sorted(ignored_by_target.items())
+        ],
         links={
             "job": _path_for(request, "dashboard_results_job", job_id=job_id),
-            "run_json": _path_for(request, "api_results_run_detail", job_id=job_id, run_id=run_id),
+            "run_json": with_filters(
+                _path_for(request, "api_results_run_detail", job_id=job_id, run_id=run_id),
+                status=status_filter,
+                category=category_filter,
+            ),
             "jobs_index": _path_for(request, "dashboard_results_jobs"),
-            "refresh": _path_for(request, "dashboard_results_run", job_id=job_id, run_id=run_id),
+            "refresh": with_filters(base_run_path, status=status_filter, category=category_filter),
         },
     )
     return HTMLResponse(page)
@@ -535,7 +679,12 @@ def _process_event_callback(config: JobConfig, payload: dict[str, Any]) -> JSONR
         connection.close()
 
 
-def build_app(*, jobs_root: Path | None = None, enable_scheduler: bool = False) -> Starlette:
+def build_app(
+    *,
+    jobs_root: Path | None = None,
+    enable_scheduler: bool = False,
+    route_base_path: str = "",
+) -> Starlette:
     root = (jobs_root if jobs_root is not None else project_root() / "jobs").resolve()
     routes, signing_env_name = _collect_channel_routes(root)
     scheduler_service = BlinkSchedulerService(root)
@@ -591,4 +740,5 @@ def build_app(*, jobs_root: Path | None = None, enable_scheduler: bool = False) 
     app.state.signing_secret_env_name = signing_env_name
     app.state.scheduler_service = scheduler_service
     app.state.enable_scheduler = enable_scheduler
+    app.state.route_base_path = _normalize_base_path(route_base_path)
     return app
