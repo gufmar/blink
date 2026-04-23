@@ -27,6 +27,27 @@ def _setup_job_with_data(tmp_path: Path, job_id: str = "zzz") -> tuple[Path, int
     conn = connect_sqlite(db_path)
     initialize_schema(conn)
     repo = CrawlRepository(conn)
+    old_run = repo.create_run(job_id)
+    repo.add_page_result(run_id=old_run, url="https://example.org", depth=0, status_code=200, ok=True)
+    repo.add_link(
+        run_id=old_run,
+        source_url="https://example.org",
+        target_url="https://broken.example.net/old",
+        is_internal=False,
+        anchor_text="Broken old",
+    )
+    old_target = repo.list_links_for_check(old_run, limit=1)[0]
+    repo.add_link_check_result(
+        crawl_link_id=old_target.link_id,
+        crawl_run_id=old_run,
+        target_url=old_target.target_url,
+        status_code=500,
+        ok=False,
+        error_message="server",
+        error_category="server",
+    )
+    repo.finish_run(run_id=old_run, pages_visited=1, pages_failed=0, links_discovered=1)
+
     run_id = repo.create_run(job_id)
     repo.add_page_result(run_id=run_id, url="https://example.org", depth=0, status_code=200, ok=True)
     repo.add_page_result(
@@ -112,6 +133,7 @@ def test_dashboard_results_pages(tmp_path: Path) -> None:
     assert "Run start" in run_page.text
     assert "Ignored external links" in run_page.text
     assert "Apply filters" in run_page.text
+    assert "Field" not in run_page.text
 
 
 def test_dashboard_results_pages_honor_proxy_root_path(tmp_path: Path) -> None:
@@ -137,7 +159,8 @@ def test_dashboard_results_pages_honor_configured_base_path(tmp_path: Path) -> N
     assert jobs_page.status_code == 200
     assert "/blink/dashboard/results/zzz" in jobs_page.text
 
-    run_page = client.get(f"/dashboard/results/zzz/runs/{run_id}?category=client")
+    run_page = client.get(f"/dashboard/results/zzz/runs/{run_id}?include_category=client&exclude_status=403")
     assert run_page.status_code == 200
     assert "/blink/api/results/jobs/zzz/runs/" in run_page.text
     assert "Clear" in run_page.text
+    assert "exclude_status=403" in run_page.text

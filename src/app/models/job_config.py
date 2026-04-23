@@ -62,16 +62,25 @@ class CrawlConfig(TypedDict):
     retry_count: int
     max_response_bytes: int
     concurrency: int
+    ignore: "UrlIgnoreConfig"
     browser: NotRequired[CrawlBrowserConfig]
     observability: NotRequired[CrawlObservabilityConfig]
 
 
-class IgnoreConfig(TypedDict):
+class UrlIgnoreConfig(TypedDict):
     url_schemes: list[str]
     netloc_contains: list[str]
     path_contains: list[str]
     path_extensions: list[str]
     fragment_contains: list[str]
+
+
+class LinkCheckIgnoreConfig(TypedDict):
+    http_status: list[int]
+    error_category: list[Literal["client", "server", "timeout", "connection", "other"]]
+    error_message_contains: list[str]
+    target_netloc_contains: list[str]
+    target_domain_equals: list[str]
 
 
 class ContentConfig(TypedDict):
@@ -88,7 +97,7 @@ class LinkCheckConfig(TypedDict):
     request_timeout_seconds: int
     retry_count: int
     consecutive_failures_before_alert: int
-    http_status: list[int]
+    ignore: LinkCheckIgnoreConfig
     follow_redirects: bool
     write_json_report: bool
     save_failure_screenshot: bool
@@ -195,7 +204,6 @@ class JobConfig(TypedDict):
     meta: MetaConfig
     target: TargetConfig
     crawl: CrawlConfig
-    ignore: IgnoreConfig
     content: ContentConfig
     link_check: LinkCheckConfig
     schedule: ScheduleConfig

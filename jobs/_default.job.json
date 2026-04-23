@@ -31,6 +31,36 @@
     "retry_count": 2,
     "max_response_bytes": 2000000,
     "concurrency": 1,
+    "ignore": {
+      "url_schemes": [
+        "mailto",
+        "ftp",
+        "tel",
+        "javascript"
+      ],
+      "netloc_contains": [
+        "localhost",
+        "google-analytics.com",
+        "youtube-nocookie.com",
+        "linkedin.com",
+        "discord.gg",
+        "youtu.be",
+        "youtube.com",
+        "twitter.com",
+        "x.com"
+      ],
+      "path_contains": [],
+      "path_extensions": [
+        ".avi",
+        ".webm",
+        ".flv",
+        ".mkv",
+        ".wmv",
+        ".mov",
+        ".iso"
+      ],
+      "fragment_contains": []
+    },
     "browser": {
       "viewport": {
         "width": 1366,
@@ -56,36 +86,6 @@
       "save_failure_html": false
     }
   },
-  "ignore": {
-    "url_schemes": [
-      "mailto",
-      "ftp",
-      "tel",
-      "javascript"
-    ],
-    "netloc_contains": [
-      "localhost",
-      "google-analytics.com",
-      "youtube-nocookie.com",
-      "linkedin.com",
-      "discord.gg",
-      "youtu.be",
-      "youtube.com",
-      "twitter.com",
-      "x.com"
-    ],
-    "path_contains": [],
-    "path_extensions": [
-      ".avi",
-      ".webm",
-      ".flv",
-      ".mkv",
-      ".wmv",
-      ".mov",
-      ".iso"
-    ],
-    "fragment_contains": []
-  },
   "content": {
     "history_keep": 8,
     "extract_main_text": true,
@@ -99,12 +99,18 @@
     "request_timeout_seconds": 10,
     "retry_count": 1,
     "consecutive_failures_before_alert": 2,
-    "http_status": [
-      400,
-      403,
-      429,
-      999
-    ],
+    "ignore": {
+      "http_status": [
+        400,
+        403,
+        429,
+        999
+      ],
+      "error_category": [],
+      "error_message_contains": [],
+      "target_netloc_contains": [],
+      "target_domain_equals": []
+    },
     "follow_redirects": true,
     "write_json_report": true,
     "save_failure_screenshot": true,

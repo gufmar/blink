@@ -156,7 +156,7 @@ def test_run_link_check_ignores_configured_http_status(tmp_path: Path) -> None:
     config["meta"]["job_id"] = "cardano.org"
     config["link_check"]["enabled"] = True
     config["link_check"]["retry_count"] = 0
-    config["link_check"]["http_status"] = [403]
+    config["link_check"]["ignore"]["http_status"] = [403]
 
     checker = FakeChecker(
         {
@@ -188,7 +188,54 @@ def test_run_link_check_ignores_configured_http_status(tmp_path: Path) -> None:
     ).fetchone()
     assert stored is not None
     assert stored["decision_state"] == "ignored"
-    assert stored["decision_reason"] == "link_check.http_status:403"
+    assert stored["decision_reason"] == "link_check.ignore.http_status:403"
+    connection.close()
+
+
+def test_run_link_check_ignores_by_error_message_and_domain(tmp_path: Path) -> None:
+    connection = connect_sqlite(tmp_path / "crawl_rule_ignore.db")
+    initialize_schema(connection)
+    repo = CrawlRepository(connection)
+    run_id = repo.create_run("cardano.org")
+    repo.add_page_result(run_id, "https://cardano.org", 0, 200, True)
+    repo.add_link(run_id=run_id, source_url="https://cardano.org", target_url="https://shielded.example", is_internal=False)
+    repo.add_link(run_id=run_id, source_url="https://cardano.org", target_url="https://ssl.example", is_internal=False)
+
+    config = load_effective_job_config("jobs/cardano.org.job.json", cwd=Path.cwd())
+    config["meta"]["job_id"] = "cardano.org"
+    config["link_check"]["enabled"] = True
+    config["link_check"]["retry_count"] = 0
+    config["link_check"]["ignore"]["http_status"] = []
+    config["link_check"]["ignore"]["target_domain_equals"] = ["shielded.example"]
+    config["link_check"]["ignore"]["error_message_contains"] = ["certificate"]
+
+    checker = FakeChecker(
+        {
+            "https://shielded.example": [HttpCheckResult(status_code=403, ok=False, error_message="HTTP Error 403")],
+            "https://ssl.example": [HttpCheckResult(status_code=None, ok=False, error_message="SSL certificate verify failed")],
+        }
+    )
+
+    summary = run_link_check(
+        config=config,
+        repository=repo,
+        checker=checker,
+        run_id=run_id,
+    )
+    assert summary.checked == 2
+    assert summary.ignored == 2
+    assert summary.reportable_failures == 0
+    stored = connection.execute(
+        """
+        SELECT target_url, decision_reason
+        FROM link_check_results
+        ORDER BY target_url ASC
+        """
+    ).fetchall()
+    assert [tuple(row) for row in stored] == [
+        ("https://shielded.example", "link_check.ignore.target_domain_equals:shielded.example"),
+        ("https://ssl.example", "link_check.ignore.error_message_contains:certificate"),
+    ]
     connection.close()
 
 

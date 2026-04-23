@@ -9,7 +9,6 @@
     "meta",
     "target",
     "crawl",
-    "ignore",
     "content",
     "link_check",
     "schedule",
@@ -74,7 +73,8 @@
         "timeouts",
         "retry_count",
         "max_response_bytes",
-        "concurrency"
+        "concurrency",
+        "ignore"
       ],
       "properties": {
         "render_mode": {
@@ -113,6 +113,7 @@
         "retry_count": { "type": "integer", "minimum": 0, "maximum": 10 },
         "max_response_bytes": { "type": "integer", "minimum": 1024 },
         "concurrency": { "type": "integer", "minimum": 1, "maximum": 16 },
+        "ignore": { "$ref": "#/$defs/urlIgnore" },
         "browser": {
           "type": "object",
           "additionalProperties": false,
@@ -175,44 +176,6 @@
         }
       }
     },
-    "ignore": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "url_schemes",
-        "netloc_contains",
-        "path_contains",
-        "path_extensions",
-        "fragment_contains"
-      ],
-      "properties": {
-        "url_schemes": {
-          "type": "array",
-          "items": { "type": "string", "minLength": 1 },
-          "default": []
-        },
-        "netloc_contains": {
-          "type": "array",
-          "items": { "type": "string", "minLength": 1 },
-          "default": []
-        },
-        "path_contains": {
-          "type": "array",
-          "items": { "type": "string", "minLength": 1 },
-          "default": []
-        },
-        "path_extensions": {
-          "type": "array",
-          "items": { "type": "string", "pattern": "^\\." },
-          "default": []
-        },
-        "fragment_contains": {
-          "type": "array",
-          "items": { "type": "string", "minLength": 1 },
-          "default": []
-        }
-      }
-    },
     "content": {
       "type": "object",
       "additionalProperties": false,
@@ -248,7 +211,7 @@
         "request_timeout_seconds",
         "retry_count",
         "consecutive_failures_before_alert",
-        "http_status",
+        "ignore",
         "follow_redirects",
         "write_json_report",
         "save_failure_screenshot",
@@ -262,11 +225,7 @@
           "type": "integer",
           "minimum": 1
         },
-        "http_status": {
-          "type": "array",
-          "items": { "type": "integer", "minimum": 100, "maximum": 999 },
-          "default": []
-        },
+        "ignore": { "$ref": "#/$defs/linkCheckIgnore" },
         "follow_redirects": { "type": "boolean" },
         "write_json_report": { "type": "boolean", "default": false },
         "save_failure_screenshot": { "type": "boolean", "default": true },
@@ -363,6 +322,85 @@
     }
   },
   "$defs": {
+    "urlIgnore": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "url_schemes",
+        "netloc_contains",
+        "path_contains",
+        "path_extensions",
+        "fragment_contains"
+      ],
+      "properties": {
+        "url_schemes": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": []
+        },
+        "netloc_contains": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": []
+        },
+        "path_contains": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": []
+        },
+        "path_extensions": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^\\." },
+          "default": []
+        },
+        "fragment_contains": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": []
+        }
+      }
+    },
+    "linkCheckIgnore": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "http_status",
+        "error_category",
+        "error_message_contains",
+        "target_netloc_contains",
+        "target_domain_equals"
+      ],
+      "properties": {
+        "http_status": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 100, "maximum": 999 },
+          "default": []
+        },
+        "error_category": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["client", "server", "timeout", "connection", "other"]
+          },
+          "default": []
+        },
+        "error_message_contains": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": []
+        },
+        "target_netloc_contains": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": []
+        },
+        "target_domain_equals": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": []
+        }
+      }
+    },
     "toleranceRule": {
       "type": "object",
       "additionalProperties": false,

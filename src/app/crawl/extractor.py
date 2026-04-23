@@ -8,7 +8,7 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from app.models.job_config import JobConfig
 
-# All ignore.* sections from job config for href parsing.
+# All crawl.ignore.* sections from job config for href parsing.
 IGNORE_SECTION_KEYS: tuple[str, ...] = (
     "url_schemes",
     "netloc_contains",
@@ -72,8 +72,8 @@ def is_internal_url(url: str, config: JobConfig) -> bool:
 
 
 def ignore_reason(url: str, config: JobConfig) -> str | None:
-    """Return the first matching ignore.* section, or None if URL is not ignored."""
-    ignore = config["ignore"]
+    """Return the first matching crawl.ignore.* section, or None if URL is not ignored."""
+    ignore = config["crawl"]["ignore"]
     split = urlsplit(url)
     scheme = split.scheme.lower()
     host = split.netloc.lower()

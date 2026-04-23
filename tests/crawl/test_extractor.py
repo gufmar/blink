@@ -15,7 +15,7 @@ def test_extract_links_counts_internal_skips_by_ignore_section() -> None:
     <a href="https://cardano.org/developers">ok</a>
     </body></html>
     """
-    config["ignore"]["path_contains"] = list(config["ignore"]["path_contains"]) + ["skipme"]
+    config["crawl"]["ignore"]["path_contains"] = list(config["crawl"]["ignore"]["path_contains"]) + ["skipme"]
     result = extract_links("https://cardano.org/", html, config)
     assert len(result.links) == 1
     assert result.internal_skipped_by_reason["path_contains"] >= 1

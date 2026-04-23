@@ -85,9 +85,9 @@ Default runtime paths are now per job id:
 
 On each crawl or link-check run, missing `db/`, `logs/`, or `artifacts/` folders are created. If the SQLite file is missing (e.g. renamed away), a new empty database with the current schema is created at the canonical path.
 
-After a crawl, the console and log include **internal links skipped by ignore.*** counts per config section (URL-based rules only).
+After a crawl, the console and log include **internal links skipped by crawl.ignore.*** counts per config section (URL-based rules only).
 
-`link_check.http_status` now controls which external-link HTTP status codes are ignored during link-check execution.
+`link_check.ignore.http_status` now controls which external-link HTTP status codes are ignored during link-check execution.
 
 Run crawl using default per-job DB path:
 
@@ -123,6 +123,9 @@ Each job’s `schedule` section defines **crawl** and **link-check** tasks (inte
 - Dashboard links are generated via request-aware routes and support:
   - proxy-injected root paths (for example `https://host/blink/dashboard`)
   - explicit base path override via `blink serve --base-path /blink` when your proxy does not forward a root path.
+- Failed-link filters support include/exclude combinations via query params:
+  - `include_status`, `exclude_status`
+  - `include_category`, `exclude_category`
 - `blink schedule show [--jobs-root <dir>] [--job <path>]` — human-readable schedule from disk
 - `blink schedule status --url http://127.0.0.1:8080` — status table from a running server
 - `blink schedule status --jobs-root <dir>` — combine on-disk jobs with local scheduler state (no HTTP)

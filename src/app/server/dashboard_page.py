@@ -412,39 +412,65 @@ def render_results_run_html(
 ) -> str:
     """Render one run's crawl/link-check details."""
 
+    comparison_run_ids: list[int] = list(failed_summary.get("comparison_run_ids") or [])
+    per_run_counts: dict[int, dict[str, int]] = dict(failed_summary.get("per_run_category_counts") or {})
+    all_categories: set[str] = set()
+    for counts in per_run_counts.values():
+        all_categories.update(counts.keys())
+
     run_stats = f"""
 <section class="metrics" aria-label="Run summary">
-  <div class="metric"><div class="value">{esc(run.get("started_at") or "—")}</div><div class="label">Run start</div></div>
-  <div class="metric"><div class="value">{esc(run.get("finished_at") or "—")}</div><div class="label">Run end</div></div>
-  <div class="metric"><div class="value">{esc(run.get("pages_visited"))}</div><div class="label">Pages visited</div></div>
-  <div class="metric"><div class="value">{esc(totals.get("pages_total"))}</div><div class="label">Pages covered by job</div></div>
-  <div class="metric"><div class="value">{esc(totals.get("external_links_total"))}</div><div class="label">Individual external links</div></div>
-  <div class="metric"><div class="value">{esc(failed_summary.get("failed_total"))}</div><div class="label">Failed external links</div></div>
+  <div class="metric"><div class="value">{esc(run.get("pages_visited"))}</div><div class="label">Pages visited <span class="info-icon" title="Number of pages crawled in this run.">(i)</span></div></div>
+  <div class="metric"><div class="value">{esc(totals.get("pages_total"))}</div><div class="label">Pages covered <span class="info-icon" title="Distinct internal pages currently known for this job DB.">(i)</span></div></div>
+  <div class="metric"><div class="value">{esc(totals.get("external_links_total"))}</div><div class="label">External links <span class="info-icon" title="Distinct external target URLs currently known for this job DB.">(i)</span></div></div>
+  <div class="metric"><div class="value">{esc(failed_summary.get("failed_total"))}</div><div class="label">Failed links <span class="info-icon" title="Latest failed link-check targets in this run before filtering.">(i)</span></div></div>
 </section>
 """
-
-    category_rows = "".join(
-        f"<tr><td>{esc(category)}</td><td class=\"mono\">{esc(count)}</td></tr>"
-        for category, count in sorted((failed_summary.get("by_category") or {}).items())
-    )
+    column_labels = [f"run {rid}" for rid in comparison_run_ids]
+    category_rows_list: list[str] = []
+    for category in sorted(all_categories):
+        counts = [int(per_run_counts.get(rid, {}).get(category, 0)) for rid in comparison_run_ids]
+        cells: list[str] = []
+        for i, count in enumerate(counts):
+            if i + 1 < len(counts):
+                diff = count - counts[i + 1]
+                diff_str = f"{diff:+d}"
+                cells.append(f"{count} ({diff_str})")
+            else:
+                cells.append(f"{count} (n/a)")
+        cells_html = "".join(f'<td class="mono">{esc(v)}</td>' for v in cells)
+        category_rows_list.append(f"<tr><td>{esc(category)}</td>{cells_html}</tr>")
+    category_rows = "".join(category_rows_list)
     if not category_rows:
-        category_rows = '<tr><td colspan="2" class="empty">No failed external links in this run.</td></tr>'
+        category_rows = '<tr><td colspan="4" class="empty">No failed external links in this run.</td></tr>'
 
     status_options = list(filters.get("status_options") or [])
     category_options = list(filters.get("category_options") or [])
-    selected_status = str(filters.get("status") or "")
-    selected_category = str(filters.get("category") or "")
+    include_status_selected = set(filters.get("include_status") or [])
+    exclude_status_selected = set(filters.get("exclude_status") or [])
+    include_category_selected = set(filters.get("include_category") or [])
+    exclude_category_selected = set(filters.get("exclude_category") or [])
     filter_action = esc(filters.get("filter_action") or "")
     clear_filters_url = esc(filters.get("clear_filters_url") or "")
 
-    status_option_html = ['<option value="">All statuses</option>']
-    status_option_html.extend(
-        f"<option value=\"{esc(v)}\"{' selected' if v == selected_status else ''}>{esc(v)}</option>"
+    include_status_option_html = []
+    include_status_option_html.extend(
+        f"<option value=\"{esc(v)}\"{' selected' if v in include_status_selected else ''}>{esc(v)}</option>"
         for v in status_options
     )
-    category_option_html = ['<option value="">All categories</option>']
-    category_option_html.extend(
-        f"<option value=\"{esc(v)}\"{' selected' if v == selected_category else ''}>{esc(v)}</option>"
+    exclude_status_option_html = []
+    exclude_status_option_html.extend(
+        f"<option value=\"{esc(v)}\"{' selected' if v in exclude_status_selected else ''}>{esc(v)}</option>"
+        for v in status_options
+    )
+    include_category_option_html = []
+    include_category_option_html.extend(
+        f"<option value=\"{esc(v)}\"{' selected' if v in include_category_selected else ''}>{esc(v)}</option>"
+        for v in category_options
+    )
+    exclude_category_option_html = []
+    exclude_category_option_html.extend(
+        f"<option value=\"{esc(v)}\"{' selected' if v in exclude_category_selected else ''}>{esc(v)}</option>"
         for v in category_options
     )
 
@@ -490,7 +516,7 @@ def render_results_run_html(
 <section class="panel" aria-label="Failed by category">
   <div class="panel-head">Failed external links by error category</div>
   <table>
-    <thead><tr><th>Error category</th><th>Count</th></tr></thead>
+    <thead><tr><th>Error category</th>{''.join(f'<th>{esc(label)}</th>' for label in column_labels)}</tr></thead>
     <tbody>{category_rows}</tbody>
   </table>
 </section>
@@ -498,11 +524,17 @@ def render_results_run_html(
   <div class="panel-head">Failed link-check results (latest per target)</div>
   <div class="filters-row">
     <form method="get" action="{filter_action}" class="filters-form">
-      <label>Status
-        <select name="status">{''.join(status_option_html)}</select>
+      <label>Include status
+        <select name="include_status" multiple size="4">{''.join(include_status_option_html)}</select>
       </label>
-      <label>Category
-        <select name="category">{''.join(category_option_html)}</select>
+      <label>Exclude status
+        <select name="exclude_status" multiple size="4">{''.join(exclude_status_option_html)}</select>
+      </label>
+      <label>Include category
+        <select name="include_category" multiple size="4">{''.join(include_category_option_html)}</select>
+      </label>
+      <label>Exclude category
+        <select name="exclude_category" multiple size="4">{''.join(exclude_category_option_html)}</select>
       </label>
       <button type="submit">Apply filters</button>
       <a href="{clear_filters_url}">Clear</a>
@@ -546,14 +578,15 @@ def render_results_run_html(
         panel_title="Overview",
         table_headers=["Field", "Value"],
         table_rows=(
-            f"<tr><td>job_id</td><td class=\"mono\">{esc(job.get('job_id', ''))}</td></tr>"
-            f"<tr><td>job_name</td><td>{esc(job.get('name', ''))}</td></tr>"
-            f"<tr><td>run_start</td><td class=\"mono\">{esc(run.get('started_at') or '—')}</td></tr>"
-            f"<tr><td>run_end</td><td class=\"mono\">{esc(run.get('finished_at') or '—')}</td></tr>"
+            f"<tr><td>job id</td><td class=\"mono\">{esc(job.get('job_id', ''))}</td></tr>"
+            f"<tr><td>job name</td><td>{esc(job.get('name', ''))}</td></tr>"
+            f"<tr><td>run start</td><td class=\"mono\">{esc(run.get('started_at') or '—')}</td></tr>"
+            f"<tr><td>run end</td><td class=\"mono\">{esc(run.get('finished_at') or '—')}</td></tr>"
         ),
         footer_link=links.get("refresh", ""),
         footer_label="Refresh",
         body_extra=body_extra,
+        show_table_header=False,
     )
 
 
@@ -569,6 +602,7 @@ def _render_results_shell(
     footer_link: str,
     footer_label: str,
     body_extra: str = "",
+    show_table_header: bool = True,
 ) -> str:
     nav_html = "\n".join(f'<a href="{esc(href)}">{esc(label)}</a>' for label, href in nav_links if href)
     headers_html = "".join(f"<th>{esc(h)}</th>" for h in table_headers)
@@ -595,7 +629,7 @@ def _render_results_shell(
     <section class="panel" aria-label="Main table">
       <div class="panel-head">{esc(panel_title)}</div>
       <table>
-        <thead><tr>{headers_html}</tr></thead>
+        {'<thead><tr>' + headers_html + '</tr></thead>' if show_table_header else ''}
         <tbody>{table_rows}</tbody>
       </table>
     </section>
@@ -639,6 +673,7 @@ def _shared_styles() -> str:
   .metric { background: var(--card); border-radius: var(--radius); padding: 1.15rem 1.25rem; box-shadow: var(--shadow); border: 1px solid var(--border); }
   .metric .value { font-size: 1.75rem; font-weight: 700; color: var(--cardano-blue); letter-spacing: -0.03em; }
   .metric .label { font-size: 0.8rem; color: var(--muted); margin-top: 0.25rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  .info-icon { font-size: 0.72rem; cursor: help; text-transform: none; }
   .panel { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); border: 1px solid var(--border); overflow: hidden; }
   .panel-head { padding: 1rem 1.25rem; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 1rem; color: var(--cardano-blue); }
   table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
@@ -651,7 +686,7 @@ def _shared_styles() -> str:
   .filters-row { padding: 0.75rem 1rem; border-bottom: 1px solid var(--border); background: #fff; }
   .filters-form { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
   .filters-form label { font-size: 0.8rem; color: var(--muted); }
-  .filters-form select { margin-left: 0.35rem; }
+  .filters-form select { margin-left: 0.35rem; min-width: 10rem; }
   .table-scroll { max-height: 28rem; overflow: auto; }
   .sticky-head thead th { position: sticky; top: 0; z-index: 1; }
   .mono { font-family: ui-monospace, "Cascadia Code", "SF Mono", Menlo, monospace; font-size: 0.78rem; }

@@ -5,10 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Callable, Protocol
+from urllib.parse import urlsplit
 
 from app.link_check.http_client import HttpCheckResult
 from app.link_check.reporting import classify_error_category
-from app.models.job_config import JobConfig
+from app.models.job_config import JobConfig, LinkCheckIgnoreConfig
 from app.persistence.repository import CrawlRepository
 
 
@@ -51,6 +52,42 @@ def _is_reportable_failure(
     reached_age = elapsed_days >= float(min_age_days)
     # Step 9 decision: report when either threshold is met.
     return reached_consecutive or reached_age
+
+
+def _match_link_check_ignore(
+    *,
+    target_url: str,
+    status_code: int | None,
+    error_message: str | None,
+    error_category: str | None,
+    ignore_config: LinkCheckIgnoreConfig,
+) -> str | None:
+    ignored_http_statuses = {int(code) for code in ignore_config["http_status"]}
+    if status_code is not None and status_code in ignored_http_statuses:
+        return f"link_check.ignore.http_status:{status_code}"
+
+    ignored_categories = {str(category) for category in ignore_config["error_category"]}
+    if error_category is not None and error_category in ignored_categories:
+        return f"link_check.ignore.error_category:{error_category}"
+
+    message = (error_message or "").lower()
+    for needle in ignore_config["error_message_contains"]:
+        token = str(needle).strip()
+        if token and token.lower() in message:
+            return f"link_check.ignore.error_message_contains:{token}"
+
+    host = urlsplit(target_url).netloc.lower()
+    for segment in ignore_config["target_netloc_contains"]:
+        token = str(segment).strip()
+        if token and token.lower() in host:
+            return f"link_check.ignore.target_netloc_contains:{token}"
+
+    for domain in ignore_config["target_domain_equals"]:
+        token = str(domain).strip()
+        if token and host == token.lower():
+            return f"link_check.ignore.target_domain_equals:{token}"
+
+    return None
 
 
 def run_link_check(
@@ -141,11 +178,17 @@ def run_link_check(
                 errored += 1
             else:
                 failed += 1
-            ignored_http_statuses = set(config["link_check"]["http_status"])
-            if final_result.status_code is not None and final_result.status_code in ignored_http_statuses:
+            ignore_decision_reason = _match_link_check_ignore(
+                target_url=link.target_url,
+                status_code=final_result.status_code,
+                error_message=final_result.error_message,
+                error_category=error_category,
+                ignore_config=config["link_check"]["ignore"],
+            )
+            if ignore_decision_reason is not None:
                 decision_state = "ignored"
                 ignore_rule_id = None
-                decision_reason = f"link_check.http_status:{final_result.status_code}"
+                decision_reason = ignore_decision_reason
                 ignored += 1
             else:
                 ignore_rule = repository.find_matching_link_ignore_rule(
