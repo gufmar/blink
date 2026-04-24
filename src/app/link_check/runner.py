@@ -20,6 +20,7 @@ class LinkChecker(Protocol):
 
 @dataclass(frozen=True)
 class LinkCheckSummary:
+    link_check_run_id: int | None
     crawl_run_id: int | None
     checked: int
     passed: int
@@ -95,6 +96,7 @@ def run_link_check(
     repository: CrawlRepository,
     checker: LinkChecker,
     run_id: int | None = None,
+    link_check_run_id: int | None = None,
     limit: int | None = None,
     max_reportable_failures: int | None = None,
     preexisting_reportable_targets: set[str] | None = None,
@@ -104,6 +106,7 @@ def run_link_check(
     """Execute link checks for latest or selected crawl run."""
     if not config["link_check"]["enabled"]:
         return LinkCheckSummary(
+            link_check_run_id=link_check_run_id,
             crawl_run_id=run_id,
             checked=0,
             passed=0,
@@ -119,6 +122,7 @@ def run_link_check(
     crawl_run_id = run_id if run_id is not None else repository.get_latest_run_id(config["meta"]["job_id"])
     if crawl_run_id is None:
         return LinkCheckSummary(
+            link_check_run_id=link_check_run_id,
             crawl_run_id=None,
             checked=0,
             passed=0,
@@ -256,6 +260,7 @@ def run_link_check(
         result_row_id = repository.add_link_check_result(
             crawl_link_id=link.link_id,
             crawl_run_id=link.crawl_run_id,
+            link_check_run_id=link_check_run_id,
             target_url=link.target_url,
             status_code=final_result.status_code,
             ok=final_result.ok,
@@ -269,6 +274,7 @@ def run_link_check(
             repository.add_link_check_screenshot(
                 link_check_result_id=result_row_id,
                 crawl_run_id=link.crawl_run_id,
+                link_check_run_id=link_check_run_id,
                 target_url=link.target_url,
                 status_code=final_result.status_code,
                 error_message=final_result.error_message,
@@ -284,6 +290,7 @@ def run_link_check(
 
     skipped = ignored + pending_tolerance
     return LinkCheckSummary(
+        link_check_run_id=link_check_run_id,
         crawl_run_id=crawl_run_id,
         checked=checked,
         passed=passed,

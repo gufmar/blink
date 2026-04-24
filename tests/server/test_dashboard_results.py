@@ -40,6 +40,7 @@ def _setup_job_with_data(tmp_path: Path, job_id: str = "zzz") -> tuple[Path, int
     repo.add_link_check_result(
         crawl_link_id=old_target.link_id,
         crawl_run_id=old_run,
+        link_check_run_id=None,
         target_url=old_target.target_url,
         status_code=500,
         ok=False,
@@ -77,6 +78,7 @@ def _setup_job_with_data(tmp_path: Path, job_id: str = "zzz") -> tuple[Path, int
     repo.add_link_check_result(
         crawl_link_id=check_target.link_id,
         crawl_run_id=run_id,
+        link_check_run_id=None,
         target_url=check_target.target_url,
         status_code=404,
         ok=False,
@@ -87,6 +89,7 @@ def _setup_job_with_data(tmp_path: Path, job_id: str = "zzz") -> tuple[Path, int
     repo.add_link_check_result(
         crawl_link_id=ignored_target.link_id,
         crawl_run_id=run_id,
+        link_check_run_id=None,
         target_url=ignored_target.target_url,
         status_code=403,
         ok=False,
@@ -129,7 +132,7 @@ def test_api_results_endpoints(tmp_path: Path) -> None:
     assert link_check_runs.status_code == 200
     link_check_runs_payload = link_check_runs.json()
     assert link_check_runs_payload["task_type"] == "link_check"
-    assert link_check_runs_payload["runs"][0]["run_id"] == run_id
+    assert link_check_runs_payload["runs"][0]["based_on_crawl_run_id"] == run_id
 
     detail = client.get(f"/api/results/jobs/zzz/runs/{run_id}")
     assert detail.status_code == 200
@@ -150,8 +153,7 @@ def test_dashboard_results_pages(tmp_path: Path) -> None:
     jobs_page = client.get("/dashboard/results")
     assert jobs_page.status_code == 200
     assert "Blink results" in jobs_page.text
-    assert "/dashboard/results/zzz?task_type=crawl" in jobs_page.text
-    assert "/dashboard/results/zzz?task_type=link_check" in jobs_page.text
+    assert "/dashboard/results/zzz" in jobs_page.text
 
     job_page = client.get("/dashboard/results/zzz")
     assert job_page.status_code == 200
@@ -177,7 +179,7 @@ def test_dashboard_results_pages_honor_proxy_root_path(tmp_path: Path) -> None:
 
     jobs_page = client.get("/dashboard/results")
     assert jobs_page.status_code == 200
-    assert "/blink/dashboard/results/zzz?task_type=crawl" in jobs_page.text
+    assert "/blink/dashboard/results/zzz" in jobs_page.text
 
     job_page = client.get("/dashboard/results/zzz")
     assert job_page.status_code == 200
@@ -191,7 +193,7 @@ def test_dashboard_results_pages_honor_configured_base_path(tmp_path: Path) -> N
 
     jobs_page = client.get("/dashboard/results")
     assert jobs_page.status_code == 200
-    assert "/blink/dashboard/results/zzz?task_type=crawl" in jobs_page.text
+    assert "/blink/dashboard/results/zzz" in jobs_page.text
 
     run_page = client.get(f"/dashboard/results/zzz/runs/{run_id}?include_category=client&exclude_status=403")
     assert run_page.status_code == 200

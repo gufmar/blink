@@ -35,6 +35,7 @@ def test_link_check_repository_read_write(tmp_path) -> None:
     repo.add_link_check_result(
         crawl_link_id=first.link_id,
         crawl_run_id=first.crawl_run_id,
+        link_check_run_id=None,
         target_url=first.target_url,
         status_code=200,
         ok=True,
@@ -53,6 +54,7 @@ def test_link_check_repository_read_write(tmp_path) -> None:
     repo.add_link_check_result(
         crawl_link_id=first.link_id,
         crawl_run_id=first.crawl_run_id,
+        link_check_run_id=None,
         target_url=first.target_url,
         status_code=503,
         ok=False,
@@ -62,6 +64,7 @@ def test_link_check_repository_read_write(tmp_path) -> None:
     repo.add_link_check_result(
         crawl_link_id=second.link_id,
         crawl_run_id=second.crawl_run_id,
+        link_check_run_id=None,
         target_url=second.target_url,
         status_code=404,
         ok=False,
@@ -84,6 +87,7 @@ def test_link_check_repository_read_write(tmp_path) -> None:
     shot_id = repo.add_link_check_screenshot(
         link_check_result_id=latest_a.row_id,
         crawl_run_id=run_id,
+        link_check_run_id=None,
         target_url=latest_a.target_url,
         status_code=latest_a.status_code,
         error_message=latest_a.error_message,

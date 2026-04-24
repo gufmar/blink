@@ -628,6 +628,7 @@ def run(
             save_failure_screenshot=config["link_check"]["save_failure_screenshot"],
         )
         selected_run_id = run_id if run_id is not None else repository.get_latest_run_id(config["meta"]["job_id"])
+        link_check_run_id: int | None = None
         source_refs_by_target: dict[str, list[dict[str, str | None]]] = {}
         preexisting_reportable_targets: set[str] = set()
         if selected_run_id is not None and show_live_failures:
@@ -646,6 +647,12 @@ def run(
         preexisting_reportable_targets = {
             row.target_url for row in repository.list_open_link_alerts(job_id=config["meta"]["job_id"])
         }
+        if selected_run_id is not None:
+            link_check_run_id = repository.create_link_check_run(
+                job_id=config["meta"]["job_id"],
+                based_on_crawl_run_id=selected_run_id,
+                started_at=datetime.now(tz=UTC).isoformat(),
+            )
         link_check_started_at = datetime.now(tz=UTC).isoformat()
         try:
             process_pending_link_retests(config=config, repository=repository, checker=checker, limit=10)
@@ -654,6 +661,7 @@ def run(
                 repository=repository,
                 checker=checker,
                 run_id=selected_run_id,
+                link_check_run_id=link_check_run_id,
                 limit=limit,
                 max_reportable_failures=max_blinks,
                 preexisting_reportable_targets=preexisting_reportable_targets,
@@ -673,6 +681,18 @@ def run(
                 ),
             )
             link_check_finished_at = datetime.now(tz=UTC).isoformat()
+            if link_check_run_id is not None:
+                repository.finish_link_check_run(
+                    link_check_run_id=link_check_run_id,
+                    finished_at=link_check_finished_at,
+                    checked_total=summary.checked,
+                    passed_total=summary.passed,
+                    failed_total=summary.failed,
+                    errored_total=summary.errored,
+                    ignored_total=summary.ignored,
+                    pending_tolerance_total=summary.pending_tolerance,
+                    reportable_failures_total=summary.reportable_failures,
+                )
         finally:
             connection.close()
             status.update("Link-check finished")
@@ -684,7 +704,8 @@ def run(
 
     typer.secho(
         (
-            f"Link-check complete: crawl_run_id={summary.crawl_run_id}, "
+            f"Link-check complete: link_check_run_id={summary.link_check_run_id}, "
+            f"based_on_crawl_run_id={summary.crawl_run_id}, "
             f"checked={summary.checked}, passed={summary.passed}, "
             f"failed={summary.failed}, errored={summary.errored}, "
             f"ignored={summary.ignored}, pending_tolerance={summary.pending_tolerance}, "

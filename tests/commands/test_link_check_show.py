@@ -25,6 +25,7 @@ def test_link_check_show_lists_latest_results_for_run(tmp_path) -> None:
     repo.add_link_check_result(
         crawl_link_id=by_url["https://ok.example"].link_id,
         crawl_run_id=run_id,
+        link_check_run_id=None,
         target_url="https://ok.example",
         status_code=200,
         ok=True,
@@ -33,6 +34,7 @@ def test_link_check_show_lists_latest_results_for_run(tmp_path) -> None:
     repo.add_link_check_result(
         crawl_link_id=by_url["https://bad.example"].link_id,
         crawl_run_id=run_id,
+        link_check_run_id=None,
         target_url="https://bad.example",
         status_code=404,
         ok=False,

@@ -97,6 +97,7 @@ class LinkCheckResultRecord:
     row_id: int
     crawl_link_id: int
     crawl_run_id: int
+    link_check_run_id: int | None
     target_url: str
     status_code: int | None
     ok: bool
@@ -110,11 +111,15 @@ class LinkCheckResultRecord:
 
 @dataclass(frozen=True)
 class LinkCheckRunRecord:
-    crawl_run_id: int
-    checked_at: str
+    run_id: int
+    job_id: str
+    based_on_crawl_run_id: int
+    started_at: str
+    finished_at: str | None
     checked_total: int
     passed_total: int
     failed_total: int
+    errored_total: int
     ignored_total: int
 
 
@@ -123,6 +128,7 @@ class LinkCheckScreenshotRecord:
     screenshot_id: int
     link_check_result_id: int | None
     crawl_run_id: int
+    link_check_run_id: int | None
     target_url: str
     status_code: int | None
     error_message: str | None
@@ -445,6 +451,7 @@ class CrawlRepository:
         self,
         crawl_link_id: int,
         crawl_run_id: int,
+        link_check_run_id: int | None,
         target_url: str,
         status_code: int | None,
         ok: bool,
@@ -459,6 +466,7 @@ class CrawlRepository:
             INSERT INTO link_check_results(
                 crawl_link_id,
                 crawl_run_id,
+                link_check_run_id,
                 target_url,
                 status_code,
                 ok,
@@ -467,11 +475,12 @@ class CrawlRepository:
                 decision_state,
                 ignore_rule_id,
                 decision_reason
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 crawl_link_id,
                 crawl_run_id,
+                link_check_run_id,
                 target_url,
                 status_code,
                 int(ok),
@@ -490,6 +499,7 @@ class CrawlRepository:
         *,
         link_check_result_id: int | None,
         crawl_run_id: int,
+        link_check_run_id: int | None,
         target_url: str,
         status_code: int | None,
         error_message: str | None,
@@ -500,13 +510,22 @@ class CrawlRepository:
             INSERT INTO link_check_screenshots(
                 link_check_result_id,
                 crawl_run_id,
+                link_check_run_id,
                 target_url,
                 status_code,
                 error_message,
                 artifact_file
-            ) VALUES (?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (link_check_result_id, crawl_run_id, target_url, status_code, error_message, artifact_file),
+            (
+                link_check_result_id,
+                crawl_run_id,
+                link_check_run_id,
+                target_url,
+                status_code,
+                error_message,
+                artifact_file,
+            ),
         )
         self._connection.commit()
         return int(cursor.lastrowid)
@@ -521,6 +540,7 @@ class CrawlRepository:
                 s.id,
                 s.link_check_result_id,
                 s.crawl_run_id,
+                s.link_check_run_id,
                 s.target_url,
                 s.status_code,
                 s.error_message,
@@ -543,6 +563,7 @@ class CrawlRepository:
                 screenshot_id=int(row["id"]),
                 link_check_result_id=result_id,
                 crawl_run_id=int(row["crawl_run_id"]),
+                link_check_run_id=int(row["link_check_run_id"]) if row["link_check_run_id"] is not None else None,
                 target_url=str(row["target_url"]),
                 status_code=int(row["status_code"]) if row["status_code"] is not None else None,
                 error_message=str(row["error_message"]) if row["error_message"] is not None else None,
@@ -554,13 +575,59 @@ class CrawlRepository:
     def list_latest_link_check_results(
         self,
         crawl_run_id: int,
+        link_check_run_id: int | None = None,
         limit: int | None = None,
     ) -> list[LinkCheckResultRecord]:
+        if link_check_run_id is not None:
+            query = """
+            SELECT
+                l.id,
+                l.crawl_link_id,
+                l.crawl_run_id,
+                l.link_check_run_id,
+                l.target_url,
+                l.status_code,
+                l.ok,
+                l.error_message,
+                l.checked_at,
+                l.error_category,
+                l.decision_state,
+                l.ignore_rule_id,
+                l.decision_reason
+            FROM link_check_results l
+            WHERE l.link_check_run_id = ?
+            ORDER BY l.target_url ASC
+            """
+            params: list[object] = [link_check_run_id]
+            if limit is not None:
+                query += " LIMIT ?"
+                params.append(limit)
+            rows = self._connection.execute(query, tuple(params)).fetchall()
+            return [
+                LinkCheckResultRecord(
+                    row_id=int(row["id"]),
+                    crawl_link_id=int(row["crawl_link_id"]),
+                    crawl_run_id=int(row["crawl_run_id"]),
+                    link_check_run_id=int(row["link_check_run_id"]) if row["link_check_run_id"] is not None else None,
+                    target_url=str(row["target_url"]),
+                    status_code=int(row["status_code"]) if row["status_code"] is not None else None,
+                    ok=bool(row["ok"]),
+                    error_message=str(row["error_message"]) if row["error_message"] is not None else None,
+                    checked_at=str(row["checked_at"]),
+                    error_category=str(row["error_category"]) if row["error_category"] is not None else None,
+                    decision_state=str(row["decision_state"]) if row["decision_state"] is not None else None,
+                    ignore_rule_id=int(row["ignore_rule_id"]) if row["ignore_rule_id"] is not None else None,
+                    decision_reason=str(row["decision_reason"]) if row["decision_reason"] is not None else None,
+                )
+                for row in rows
+            ]
+
         query = """
             SELECT
                 l.id,
                 l.crawl_link_id,
                 l.crawl_run_id,
+                l.link_check_run_id,
                 l.target_url,
                 l.status_code,
                 l.ok,
@@ -590,6 +657,7 @@ class CrawlRepository:
                 row_id=int(row["id"]),
                 crawl_link_id=int(row["crawl_link_id"]),
                 crawl_run_id=int(row["crawl_run_id"]),
+                link_check_run_id=int(row["link_check_run_id"]) if row["link_check_run_id"] is not None else None,
                 target_url=str(row["target_url"]),
                 status_code=int(row["status_code"]) if row["status_code"] is not None else None,
                 ok=bool(row["ok"]),
@@ -606,14 +674,60 @@ class CrawlRepository:
     def list_latest_failed_link_check_results(
         self,
         crawl_run_id: int,
+        link_check_run_id: int | None = None,
         limit: int = 200,
     ) -> list[LinkCheckResultRecord]:
+        if link_check_run_id is not None:
+            rows = self._connection.execute(
+                """
+                SELECT
+                    l.id,
+                    l.crawl_link_id,
+                    l.crawl_run_id,
+                    l.link_check_run_id,
+                    l.target_url,
+                    l.status_code,
+                    l.ok,
+                    l.error_message,
+                    l.checked_at,
+                    l.error_category,
+                    l.decision_state,
+                    l.ignore_rule_id,
+                    l.decision_reason
+                FROM link_check_results l
+                WHERE l.link_check_run_id = ?
+                  AND l.ok = 0
+                ORDER BY l.checked_at DESC, l.target_url ASC
+                LIMIT ?
+                """,
+                (link_check_run_id, limit),
+            ).fetchall()
+            return [
+                LinkCheckResultRecord(
+                    row_id=int(row["id"]),
+                    crawl_link_id=int(row["crawl_link_id"]),
+                    crawl_run_id=int(row["crawl_run_id"]),
+                    link_check_run_id=int(row["link_check_run_id"]) if row["link_check_run_id"] is not None else None,
+                    target_url=str(row["target_url"]),
+                    status_code=int(row["status_code"]) if row["status_code"] is not None else None,
+                    ok=bool(row["ok"]),
+                    error_message=str(row["error_message"]) if row["error_message"] is not None else None,
+                    checked_at=str(row["checked_at"]),
+                    error_category=str(row["error_category"]) if row["error_category"] is not None else None,
+                    decision_state=str(row["decision_state"]) if row["decision_state"] is not None else None,
+                    ignore_rule_id=int(row["ignore_rule_id"]) if row["ignore_rule_id"] is not None else None,
+                    decision_reason=str(row["decision_reason"]) if row["decision_reason"] is not None else None,
+                )
+                for row in rows
+            ]
+
         rows = self._connection.execute(
             """
             SELECT
                 l.id,
                 l.crawl_link_id,
                 l.crawl_run_id,
+                l.link_check_run_id,
                 l.target_url,
                 l.status_code,
                 l.ok,
@@ -642,6 +756,7 @@ class CrawlRepository:
                 row_id=int(row["id"]),
                 crawl_link_id=int(row["crawl_link_id"]),
                 crawl_run_id=int(row["crawl_run_id"]),
+                link_check_run_id=int(row["link_check_run_id"]) if row["link_check_run_id"] is not None else None,
                 target_url=str(row["target_url"]),
                 status_code=int(row["status_code"]) if row["status_code"] is not None else None,
                 ok=bool(row["ok"]),
@@ -659,37 +774,123 @@ class CrawlRepository:
         rows = self._connection.execute(
             """
             SELECT
-                l.crawl_run_id AS crawl_run_id,
-                MAX(l.checked_at) AS checked_at,
-                COUNT(*) AS checked_total,
-                SUM(CASE WHEN l.ok = 1 THEN 1 ELSE 0 END) AS passed_total,
-                SUM(
-                    CASE
-                        WHEN l.ok = 0 AND COALESCE(l.decision_state, '') != 'ignored' THEN 1
-                        ELSE 0
-                    END
-                ) AS failed_total,
-                SUM(CASE WHEN COALESCE(l.decision_state, '') = 'ignored' THEN 1 ELSE 0 END) AS ignored_total
-            FROM link_check_results l
-            JOIN crawl_runs r ON r.id = l.crawl_run_id
-            WHERE r.job_id = ?
-            GROUP BY l.crawl_run_id
-            ORDER BY MAX(l.checked_at) DESC, l.crawl_run_id DESC
+                id,
+                job_id,
+                based_on_crawl_run_id,
+                started_at,
+                finished_at,
+                checked_total,
+                passed_total,
+                failed_total,
+                errored_total,
+                ignored_total
+            FROM link_check_runs
+            WHERE job_id = ?
+            ORDER BY started_at DESC, id DESC
             LIMIT ?
             """,
             (job_id, limit),
         ).fetchall()
         return [
             LinkCheckRunRecord(
-                crawl_run_id=int(row["crawl_run_id"]),
-                checked_at=str(row["checked_at"]),
+                run_id=int(row["id"]),
+                job_id=str(row["job_id"]),
+                based_on_crawl_run_id=int(row["based_on_crawl_run_id"]),
+                started_at=str(row["started_at"]),
+                finished_at=str(row["finished_at"]) if row["finished_at"] is not None else None,
                 checked_total=int(row["checked_total"] or 0),
                 passed_total=int(row["passed_total"] or 0),
                 failed_total=int(row["failed_total"] or 0),
+                errored_total=int(row["errored_total"] or 0),
                 ignored_total=int(row["ignored_total"] or 0),
             )
             for row in rows
         ]
+
+    def create_link_check_run(self, *, job_id: str, based_on_crawl_run_id: int, started_at: str) -> int:
+        cursor = self._connection.execute(
+            """
+            INSERT INTO link_check_runs(job_id, based_on_crawl_run_id, started_at)
+            VALUES (?, ?, ?)
+            """,
+            (job_id, based_on_crawl_run_id, started_at),
+        )
+        self._connection.commit()
+        return int(cursor.lastrowid)
+
+    def finish_link_check_run(
+        self,
+        *,
+        link_check_run_id: int,
+        finished_at: str,
+        checked_total: int,
+        passed_total: int,
+        failed_total: int,
+        errored_total: int,
+        ignored_total: int,
+        pending_tolerance_total: int,
+        reportable_failures_total: int,
+    ) -> None:
+        self._connection.execute(
+            """
+            UPDATE link_check_runs
+            SET finished_at = ?,
+                checked_total = ?,
+                passed_total = ?,
+                failed_total = ?,
+                errored_total = ?,
+                ignored_total = ?,
+                pending_tolerance_total = ?,
+                reportable_failures_total = ?
+            WHERE id = ?
+            """,
+            (
+                finished_at,
+                checked_total,
+                passed_total,
+                failed_total,
+                errored_total,
+                ignored_total,
+                pending_tolerance_total,
+                reportable_failures_total,
+                link_check_run_id,
+            ),
+        )
+        self._connection.commit()
+
+    def get_link_check_run(self, link_check_run_id: int) -> LinkCheckRunRecord | None:
+        row = self._connection.execute(
+            """
+            SELECT
+                id,
+                job_id,
+                based_on_crawl_run_id,
+                started_at,
+                finished_at,
+                checked_total,
+                passed_total,
+                failed_total,
+                errored_total,
+                ignored_total
+            FROM link_check_runs
+            WHERE id = ?
+            """,
+            (link_check_run_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return LinkCheckRunRecord(
+            run_id=int(row["id"]),
+            job_id=str(row["job_id"]),
+            based_on_crawl_run_id=int(row["based_on_crawl_run_id"]),
+            started_at=str(row["started_at"]),
+            finished_at=str(row["finished_at"]) if row["finished_at"] is not None else None,
+            checked_total=int(row["checked_total"] or 0),
+            passed_total=int(row["passed_total"] or 0),
+            failed_total=int(row["failed_total"] or 0),
+            errored_total=int(row["errored_total"] or 0),
+            ignored_total=int(row["ignored_total"] or 0),
+        )
 
     def list_source_page_refs_for_targets(self, run_id: int, target_urls: list[str]) -> dict[str, list[ExternalLinkSourceRefRecord]]:
         if not target_urls:

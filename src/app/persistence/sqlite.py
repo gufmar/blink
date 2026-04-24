@@ -64,6 +64,7 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             crawl_link_id INTEGER NOT NULL,
             crawl_run_id INTEGER NOT NULL,
+            link_check_run_id INTEGER,
             target_url TEXT NOT NULL,
             status_code INTEGER,
             ok INTEGER NOT NULL,
@@ -75,6 +76,7 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
             checked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (crawl_link_id) REFERENCES crawl_links(id) ON DELETE CASCADE,
             FOREIGN KEY (crawl_run_id) REFERENCES crawl_runs(id) ON DELETE CASCADE,
+            FOREIGN KEY (link_check_run_id) REFERENCES link_check_runs(id) ON DELETE CASCADE,
             FOREIGN KEY (ignore_rule_id) REFERENCES link_ignore_rules(id) ON DELETE SET NULL
         );
 
@@ -85,13 +87,15 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             link_check_result_id INTEGER,
             crawl_run_id INTEGER NOT NULL,
+            link_check_run_id INTEGER,
             target_url TEXT NOT NULL,
             status_code INTEGER,
             error_message TEXT,
             artifact_file TEXT NOT NULL,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (link_check_result_id) REFERENCES link_check_results(id) ON DELETE SET NULL,
-            FOREIGN KEY (crawl_run_id) REFERENCES crawl_runs(id) ON DELETE CASCADE
+            FOREIGN KEY (crawl_run_id) REFERENCES crawl_runs(id) ON DELETE CASCADE,
+            FOREIGN KEY (link_check_run_id) REFERENCES link_check_runs(id) ON DELETE CASCADE
         );
 
         CREATE INDEX IF NOT EXISTS idx_link_check_screenshots_result
@@ -99,6 +103,25 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_link_check_screenshots_run_target
             ON link_check_screenshots(crawl_run_id, target_url, created_at DESC, id DESC);
+
+        CREATE TABLE IF NOT EXISTS link_check_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL,
+            based_on_crawl_run_id INTEGER NOT NULL,
+            started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            finished_at TEXT,
+            checked_total INTEGER NOT NULL DEFAULT 0,
+            passed_total INTEGER NOT NULL DEFAULT 0,
+            failed_total INTEGER NOT NULL DEFAULT 0,
+            errored_total INTEGER NOT NULL DEFAULT 0,
+            ignored_total INTEGER NOT NULL DEFAULT 0,
+            pending_tolerance_total INTEGER NOT NULL DEFAULT 0,
+            reportable_failures_total INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (based_on_crawl_run_id) REFERENCES crawl_runs(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_link_check_runs_job_started
+            ON link_check_runs(job_id, started_at DESC, id DESC);
 
         CREATE TABLE IF NOT EXISTS link_ignore_rules (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -322,6 +345,7 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
     )
     _ensure_run_pages_text_metric_columns(connection)
     _ensure_link_check_result_decision_columns(connection)
+    _ensure_link_check_run_columns(connection)
     _ensure_link_alerts_lifecycle_columns(connection)
     _ensure_link_alert_events_table(connection)
     _ensure_link_retest_queue_table(connection)
@@ -358,8 +382,17 @@ def _ensure_link_check_result_decision_columns(connection: sqlite3.Connection) -
         statements.append("ALTER TABLE link_check_results ADD COLUMN ignore_rule_id INTEGER")
     if "decision_reason" not in names:
         statements.append("ALTER TABLE link_check_results ADD COLUMN decision_reason TEXT")
+    if "link_check_run_id" not in names:
+        statements.append("ALTER TABLE link_check_results ADD COLUMN link_check_run_id INTEGER")
     for stmt in statements:
         connection.execute(stmt)
+
+
+def _ensure_link_check_run_columns(connection: sqlite3.Connection) -> None:
+    rows = connection.execute("PRAGMA table_info(link_check_screenshots)").fetchall()
+    names = {str(r[1]) for r in rows}
+    if "link_check_run_id" not in names:
+        connection.execute("ALTER TABLE link_check_screenshots ADD COLUMN link_check_run_id INTEGER")
 
 
 def _ensure_link_alerts_lifecycle_columns(connection: sqlite3.Connection) -> None:

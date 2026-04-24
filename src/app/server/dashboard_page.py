@@ -378,10 +378,37 @@ def render_results_job_html(
 
     def row_for(run: dict[str, Any]) -> str:
         started = esc(run.get("started_at") or "—")
+        row_task_type = str(run.get("task_type") or task_type)
+        finished_val = run.get("finished_at")
+        finished = esc(finished_val if finished_val else "ongoing")
+        if task_type == "all":
+            if row_task_type == "link_check":
+                return f"""<tr>
+    <td class="mono"><a href="{esc(run.get("details_url", ""))}">{started}</a></td>
+    <td>{esc(row_task_type)}</td>
+    <td class="mono">{finished}</td>
+    <td class="mono">{esc(run.get("run_id", ""))}</td>
+    <td class="mono">{esc(run.get("based_on_crawl_run_id") if run.get("based_on_crawl_run_id") is not None else "—")}</td>
+    <td class="mono">{esc(run.get("checked_total") if run.get("checked_total") is not None else "—")}</td>
+    <td class="mono">{esc(run.get("failed_total") if run.get("failed_total") is not None else "—")}</td>
+    <td class="mono">{esc(run.get("ignored_total") if run.get("ignored_total") is not None else "—")}</td>
+  </tr>"""
+            return f"""<tr>
+    <td class="mono"><a href="{esc(run.get("details_url", ""))}">{started}</a></td>
+    <td>{esc(row_task_type)}</td>
+    <td class="mono">{finished}</td>
+    <td class="mono">{esc(run.get("run_id", ""))}</td>
+    <td class="mono">—</td>
+    <td class="mono">{esc(run.get("pages_visited") if run.get("pages_visited") is not None else "—")}</td>
+    <td class="mono">{esc(run.get("pages_failed") if run.get("pages_failed") is not None else "—")}</td>
+    <td class="mono">—</td>
+  </tr>"""
         if task_type == "link_check":
             return f"""<tr>
     <td class="mono"><a href="{esc(run.get("details_url", ""))}">{started}</a></td>
+    <td class="mono">{finished}</td>
     <td class="mono">{esc(run.get("run_id", ""))}</td>
+    <td class="mono">{esc(run.get("based_on_crawl_run_id") if run.get("based_on_crawl_run_id") is not None else "—")}</td>
     <td class="mono">{esc(run.get("checked_total") if run.get("checked_total") is not None else "—")}</td>
     <td class="mono">{esc(run.get("failed_total") if run.get("failed_total") is not None else "—")}</td>
     <td class="mono">{esc(run.get("ignored_total") if run.get("ignored_total") is not None else "—")}</td>
@@ -389,19 +416,35 @@ def render_results_job_html(
         return f"""<tr>
     <td class="mono"><a href="{esc(run.get("details_url", ""))}">{started}</a></td>
     <td class="mono">{esc(run.get("run_id", ""))}</td>
-    <td class="mono">{esc(run.get("finished_at") or "—")}</td>
+    <td class="mono">{finished}</td>
     <td class="mono">{esc(run.get("pages_visited"))}</td>
     <td class="mono">{esc(run.get("pages_failed"))}</td>
     <td class="mono">{esc(run.get("links_discovered"))}</td>
   </tr>"""
 
     rows = "\n".join(row_for(run) for run in run_rows) if run_rows else ""
-    empty_colspan = "5" if task_type == "link_check" else "6"
+    empty_colspan = "8" if task_type == "all" else ("7" if task_type == "link_check" else "6")
     empty_row = f'<tr><td colspan="{empty_colspan}" class="empty">No runs available for this task yet.</td></tr>'
     if task_type == "link_check":
-        table_headers = ["Checked at", "Crawl run id", "Checked", "Failed", "Ignored"]
+        table_headers = ["Checked at", "Finished", "Link-check run id", "Based on crawl run id", "Checked", "Failed", "Ignored"]
+    elif task_type == "all":
+        table_headers = ["Started", "Task type", "Finished", "Run id", "Based on crawl run id", "Visited/Checked", "Failed", "Ignored"]
     else:
         table_headers = ["Started", "Run id", "Finished", "Pages visited", "Pages failed", "Links discovered"]
+    toggle_row = ""
+    if task_type == "all":
+        show_crawl = bool(links.get("show_crawl"))
+        show_link_check = bool(links.get("show_link_check"))
+        toggle_row = (
+            '<section class="panel" aria-label="Run filters" style="margin-bottom: 1rem;">'
+            '<div class="panel-head">Run type filter</div>'
+            '<div style="padding: 0.75rem 1rem;">'
+            f'Crawl: <strong>{"on" if show_crawl else "off"}</strong> · '
+            f'<a href="{esc(links.get("show_crawl_url", ""))}">toggle</a> · '
+            f'Link-check: <strong>{"on" if show_link_check else "off"}</strong> · '
+            f'<a href="{esc(links.get("show_link_check_url", ""))}">toggle</a>'
+            "</div></section>"
+        )
     return _render_results_shell(
         title=f"Blink results · {esc(job.get('job_id', 'job'))} · {esc(task_type)}",
         heading=f"Job results · {esc(job.get('job_id', ''))} · {esc(task_type)}",
@@ -417,6 +460,7 @@ def render_results_job_html(
         table_rows=rows if rows else empty_row,
         footer_link=links.get("refresh", ""),
         footer_label="Refresh",
+        body_extra=toggle_row,
     )
 
 
@@ -440,6 +484,14 @@ def render_results_run_html(
     for counts in per_run_counts.values():
         all_categories.update(counts.keys())
 
+    based_on_metric = ""
+    if str(run.get("task_type") or "crawl") == "link_check":
+        based_on_metric = (
+            f'<div class="metric"><div class="value">{esc(run.get("link_check_run_id") or run.get("run_id"))}</div>'
+            '<div class="label">Link-check run id</div></div>'
+            f'<div class="metric"><div class="value">{esc(run.get("based_on_crawl_run_id") or "—")}</div>'
+            '<div class="label">Based on crawl run id</div></div>'
+        )
     run_stats = f"""
 <section class="metrics" aria-label="Run summary">
   <div class="metric"><div class="value">{esc(run.get("pages_visited"))}</div><div class="label">Pages visited <span class="info-icon" title="Number of pages crawled in this run.">(i)</span></div></div>
@@ -447,6 +499,7 @@ def render_results_run_html(
   <div class="metric"><div class="value">{esc(totals.get("external_links_total"))}</div><div class="label">External links <span class="info-icon" title="Distinct external target URLs currently known for this job DB.">(i)</span></div></div>
   <div class="metric"><div class="value">{esc(failed_summary.get("failed_total"))}</div><div class="label">Failed links <span class="info-icon" title="Latest failed link-check targets in this run before filtering.">(i)</span></div></div>
   <div class="metric"><div class="value">{esc(failed_summary.get("ignored_total", 0))}</div><div class="label">Ignored links <span class="info-icon" title="Latest link-check targets suppressed by ignore rules (status/category/message/domain).">(i)</span></div></div>
+  {based_on_metric}
 </section>
 """
     column_labels = [f"run {rid}" for rid in comparison_run_ids]
