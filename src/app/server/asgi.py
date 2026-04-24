@@ -179,13 +179,37 @@ def _serialize_run_history(job_id: str, repo: CrawlRepository | None, *, limit: 
     ]
 
 
+def _serialize_link_check_history(job_id: str, repo: CrawlRepository | None, *, limit: int) -> list[dict[str, Any]]:
+    if repo is None:
+        return []
+    try:
+        runs = repo.list_link_check_run_history(job_id, limit=limit)
+    except sqlite3.Error:
+        return []
+    return [
+        {
+            "run_id": rec.crawl_run_id,
+            "started_at": rec.checked_at,
+            "finished_at": rec.checked_at,
+            "checked_total": rec.checked_total,
+            "passed_total": rec.passed_total,
+            "failed_total": rec.failed_total,
+            "ignored_total": rec.ignored_total,
+        }
+        for rec in runs
+    ]
+
+
 async def schedule_dashboard(request: Request) -> HTMLResponse:
     svc: BlinkSchedulerService = request.app.state.scheduler_service
     payload = svc.build_schedule_payload()
     for task in payload.get("tasks") or []:
         job_id = str(task.get("job_id") or "")
+        task_type = str(task.get("task_type") or "crawl")
         if job_id:
-            task["results_url"] = _path_for(request, "dashboard_results_job", job_id=job_id)
+            task["results_url"] = (
+                f"{_path_for(request, 'dashboard_results_job', job_id=job_id)}?task_type={task_type}"
+            )
     page = render_schedule_dashboard_html(
         payload,
         links={
@@ -203,20 +227,36 @@ async def api_results_jobs(request: Request) -> JSONResponse:
     jobs_root: Path = request.app.state.jobs_root
     jobs = _load_job_entries(jobs_root)
     out: list[dict[str, Any]] = []
+    task_rows: list[dict[str, Any]] = []
     for job in jobs:
         repo_and_conn = _open_repo_if_exists(_db_path_for_job(jobs_root, str(job["job_id"])))
         repo = repo_and_conn[0] if repo_and_conn else None
         try:
-            history = _serialize_run_history(str(job["job_id"]), repo, limit=1)
+            crawl_history = _serialize_run_history(str(job["job_id"]), repo, limit=1)
+            link_check_history = _serialize_link_check_history(str(job["job_id"]), repo, limit=1)
             out.append(
                 {
                     **job,
-                    "latest_run": history[0] if history else None,
+                    "latest_run": crawl_history[0] if crawl_history else None,
+                }
+            )
+            task_rows.append(
+                {
+                    **job,
+                    "task_type": "crawl",
+                    "latest_run": crawl_history[0] if crawl_history else None,
+                }
+            )
+            task_rows.append(
+                {
+                    **job,
+                    "task_type": "link_check",
+                    "latest_run": link_check_history[0] if link_check_history else None,
                 }
             )
         finally:
             _close_repo(repo_and_conn)
-    return JSONResponse({"jobs": out})
+    return JSONResponse({"jobs": out, "task_rows": task_rows})
 
 
 async def api_results_job_runs(request: Request) -> JSONResponse:
@@ -225,13 +265,19 @@ async def api_results_job_runs(request: Request) -> JSONResponse:
     job = _job_entry_by_id(jobs_root, job_id)
     if job is None:
         return _json_error(404, "job_not_found")
+    task_type = str(request.query_params.get("task_type") or "crawl").strip().lower()
+    if task_type not in {"crawl", "link_check"}:
+        return _json_error(400, "invalid_task_type")
     repo_and_conn = _open_repo_if_exists(_db_path_for_job(jobs_root, job_id))
     repo = repo_and_conn[0] if repo_and_conn else None
     try:
-        runs = _serialize_run_history(job_id, repo, limit=100)
+        if task_type == "link_check":
+            runs = _serialize_link_check_history(job_id, repo, limit=100)
+        else:
+            runs = _serialize_run_history(job_id, repo, limit=100)
     finally:
         _close_repo(repo_and_conn)
-    return JSONResponse({"job": job, "runs": runs})
+    return JSONResponse({"job": job, "task_type": task_type, "runs": runs})
 
 
 async def api_results_run_detail(request: Request) -> JSONResponse:
@@ -361,12 +407,19 @@ async def api_results_run_detail(request: Request) -> JSONResponse:
 async def dashboard_results_jobs(request: Request) -> HTMLResponse:
     payload = (await api_results_jobs(request)).body
     data = json.loads(payload.decode("utf-8"))
-    jobs = list(data.get("jobs") or [])
-    for job in jobs:
-        job["details_url"] = _path_for(request, "dashboard_results_job", job_id=str(job.get("job_id")))
+    rows = list(data.get("task_rows") or [])
+    for row in rows:
+        job_id = str(row.get("job_id") or "")
+        task_type = str(row.get("task_type") or "crawl")
+        row["details_url"] = (
+            f"{_path_for(request, 'dashboard_results_job', job_id=job_id)}?task_type={task_type}"
+            if job_id
+            else ""
+        )
     page = render_results_jobs_html(
-        {"jobs": jobs},
+        {"rows": rows},
         links={
+            "main_dashboard": _path_for(request, "dashboard_schedule"),
             "schedule": _path_for(request, "dashboard_schedule"),
             "jobs_json": _path_for(request, "api_results_jobs"),
             "health": _path_for(request, "health"),
@@ -382,27 +435,38 @@ async def dashboard_results_job(request: Request) -> HTMLResponse:
     job = _job_entry_by_id(jobs_root, job_id)
     if job is None:
         return HTMLResponse("Job not found", status_code=404)
+    task_type = str(request.query_params.get("task_type") or "crawl").strip().lower()
+    if task_type not in {"crawl", "link_check"}:
+        return HTMLResponse("Invalid task_type", status_code=400)
     repo_and_conn = _open_repo_if_exists(_db_path_for_job(jobs_root, job_id))
     repo = repo_and_conn[0] if repo_and_conn else None
     try:
-        run_rows = _serialize_run_history(job_id, repo, limit=100)
+        if task_type == "link_check":
+            run_rows = _serialize_link_check_history(job_id, repo, limit=100)
+        else:
+            run_rows = _serialize_run_history(job_id, repo, limit=100)
     finally:
         _close_repo(repo_and_conn)
     for run in run_rows:
-        run["details_url"] = _path_for(
+        base_details_url = _path_for(
             request,
             "dashboard_results_run",
             job_id=job_id,
             run_id=int(run["run_id"]),
         )
+        run["details_url"] = f"{base_details_url}?task_type={task_type}"
     page = render_results_job_html(
         job=job,
+        task_type=task_type,
         run_rows=run_rows,
         links={
+            "main_dashboard": _path_for(request, "dashboard_schedule"),
             "jobs_index": _path_for(request, "dashboard_results_jobs"),
-            "runs_json": _path_for(request, "api_results_job_runs", job_id=job_id),
+            "runs_json": (
+                f"{_path_for(request, 'api_results_job_runs', job_id=job_id)}?task_type={task_type}"
+            ),
             "schedule": _path_for(request, "dashboard_schedule"),
-            "refresh": _path_for(request, "dashboard_results_job", job_id=job_id),
+            "refresh": f"{_path_for(request, 'dashboard_results_job', job_id=job_id)}?task_type={task_type}",
         },
     )
     return HTMLResponse(page)
@@ -412,6 +476,9 @@ async def dashboard_results_run(request: Request) -> HTMLResponse:
     jobs_root: Path = request.app.state.jobs_root
     job_id = str(request.path_params["job_id"])
     run_id = int(request.path_params["run_id"])
+    task_type = str(request.query_params.get("task_type") or "crawl").strip().lower()
+    if task_type not in {"crawl", "link_check"}:
+        task_type = "crawl"
     job = _job_entry_by_id(jobs_root, job_id)
     if job is None:
         return HTMLResponse("Job not found", status_code=404)
@@ -565,7 +632,8 @@ async def dashboard_results_run(request: Request) -> HTMLResponse:
             for row in ignored_failed_all
         ],
         links={
-            "job": _path_for(request, "dashboard_results_job", job_id=job_id),
+            "main_dashboard": _path_for(request, "dashboard_schedule"),
+            "job": f"{_path_for(request, 'dashboard_results_job', job_id=job_id)}?task_type={task_type}",
             "run_json": with_filters(
                 _path_for(request, "api_results_run_detail", job_id=job_id, run_id=run_id),
                 include_status_q=include_status,

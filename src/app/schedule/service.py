@@ -85,8 +85,10 @@ class BlinkSchedulerService:
     ) -> None:
         cfg = entry.config
         sch = cfg["schedule"]
+        delay = max(0, int(task["startup_delay_seconds"]))
+        not_before = datetime.now(tz=UTC) + timedelta(seconds=delay)
         try:
-            trigger = build_trigger(task, timezone_name=sch["timezone"])
+            trigger = build_trigger(task, timezone_name=sch["timezone"], not_before=not_before)
         except (TypeError, ValueError) as exc:
             logger.warning(
                 "Skipping scheduled task {} {} (invalid trigger: {})",
@@ -95,8 +97,6 @@ class BlinkSchedulerService:
                 exc,
             )
             return
-        delay = max(0, int(task["startup_delay_seconds"]))
-        start_date = datetime.now(tz=UTC) + timedelta(seconds=delay)
 
         def tick() -> None:
             self._execute_task(entry, task_type, task)
@@ -110,7 +110,6 @@ class BlinkSchedulerService:
                 replace_existing=True,
                 max_instances=1,
                 coalesce=True,
-                next_run_time=start_date,
                 misfire_grace_time=max(60, delay),
             )
         except Exception as exc:

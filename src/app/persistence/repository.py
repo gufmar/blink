@@ -109,6 +109,16 @@ class LinkCheckResultRecord:
 
 
 @dataclass(frozen=True)
+class LinkCheckRunRecord:
+    crawl_run_id: int
+    checked_at: str
+    checked_total: int
+    passed_total: int
+    failed_total: int
+    ignored_total: int
+
+
+@dataclass(frozen=True)
 class LinkCheckScreenshotRecord:
     screenshot_id: int
     link_check_result_id: int | None
@@ -641,6 +651,42 @@ class CrawlRepository:
                 decision_state=str(row["decision_state"]) if row["decision_state"] is not None else None,
                 ignore_rule_id=int(row["ignore_rule_id"]) if row["ignore_rule_id"] is not None else None,
                 decision_reason=str(row["decision_reason"]) if row["decision_reason"] is not None else None,
+            )
+            for row in rows
+        ]
+
+    def list_link_check_run_history(self, job_id: str, *, limit: int = 100) -> list[LinkCheckRunRecord]:
+        rows = self._connection.execute(
+            """
+            SELECT
+                l.crawl_run_id AS crawl_run_id,
+                MAX(l.checked_at) AS checked_at,
+                COUNT(*) AS checked_total,
+                SUM(CASE WHEN l.ok = 1 THEN 1 ELSE 0 END) AS passed_total,
+                SUM(
+                    CASE
+                        WHEN l.ok = 0 AND COALESCE(l.decision_state, '') != 'ignored' THEN 1
+                        ELSE 0
+                    END
+                ) AS failed_total,
+                SUM(CASE WHEN COALESCE(l.decision_state, '') = 'ignored' THEN 1 ELSE 0 END) AS ignored_total
+            FROM link_check_results l
+            JOIN crawl_runs r ON r.id = l.crawl_run_id
+            WHERE r.job_id = ?
+            GROUP BY l.crawl_run_id
+            ORDER BY MAX(l.checked_at) DESC, l.crawl_run_id DESC
+            LIMIT ?
+            """,
+            (job_id, limit),
+        ).fetchall()
+        return [
+            LinkCheckRunRecord(
+                crawl_run_id=int(row["crawl_run_id"]),
+                checked_at=str(row["checked_at"]),
+                checked_total=int(row["checked_total"] or 0),
+                passed_total=int(row["passed_total"] or 0),
+                failed_total=int(row["failed_total"] or 0),
+                ignored_total=int(row["ignored_total"] or 0),
             )
             for row in rows
         ]

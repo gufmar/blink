@@ -116,12 +116,20 @@ def test_api_results_endpoints(tmp_path: Path) -> None:
     jobs_payload = jobs.json()
     assert jobs_payload["jobs"][0]["job_id"] == "zzz"
     assert jobs_payload["jobs"][0]["latest_run"]["run_id"] == run_id
+    assert len(jobs_payload["task_rows"]) == 2
+    task_types = {row["task_type"] for row in jobs_payload["task_rows"]}
+    assert task_types == {"crawl", "link_check"}
 
     runs = client.get("/api/results/jobs/zzz/runs")
     assert runs.status_code == 200
     runs_payload = runs.json()
     assert runs_payload["job"]["job_id"] == "zzz"
     assert runs_payload["runs"][0]["run_id"] == run_id
+    link_check_runs = client.get("/api/results/jobs/zzz/runs?task_type=link_check")
+    assert link_check_runs.status_code == 200
+    link_check_runs_payload = link_check_runs.json()
+    assert link_check_runs_payload["task_type"] == "link_check"
+    assert link_check_runs_payload["runs"][0]["run_id"] == run_id
 
     detail = client.get(f"/api/results/jobs/zzz/runs/{run_id}")
     assert detail.status_code == 200
@@ -142,7 +150,8 @@ def test_dashboard_results_pages(tmp_path: Path) -> None:
     jobs_page = client.get("/dashboard/results")
     assert jobs_page.status_code == 200
     assert "Blink results" in jobs_page.text
-    assert "/dashboard/results/zzz" in jobs_page.text
+    assert "/dashboard/results/zzz?task_type=crawl" in jobs_page.text
+    assert "/dashboard/results/zzz?task_type=link_check" in jobs_page.text
 
     job_page = client.get("/dashboard/results/zzz")
     assert job_page.status_code == 200
@@ -156,7 +165,7 @@ def test_dashboard_results_pages(tmp_path: Path) -> None:
     assert "https://ignored.example.net" in run_page.text
     assert "Ignored link-check results (latest per target)" in run_page.text
     assert "Run start" in run_page.text
-    assert "Ignored external links" in run_page.text
+    assert "Main dashboard" in run_page.text
     assert "Apply filters" in run_page.text
     assert "Field" not in run_page.text
 
@@ -168,11 +177,11 @@ def test_dashboard_results_pages_honor_proxy_root_path(tmp_path: Path) -> None:
 
     jobs_page = client.get("/dashboard/results")
     assert jobs_page.status_code == 200
-    assert "/blink/dashboard/results/zzz" in jobs_page.text
+    assert "/blink/dashboard/results/zzz?task_type=crawl" in jobs_page.text
 
     job_page = client.get("/dashboard/results/zzz")
     assert job_page.status_code == 200
-    assert f"/blink/dashboard/results/zzz/runs/{run_id}" in job_page.text
+    assert f"/blink/dashboard/results/zzz/runs/{run_id}?task_type=crawl" in job_page.text
 
 
 def test_dashboard_results_pages_honor_configured_base_path(tmp_path: Path) -> None:
@@ -182,7 +191,7 @@ def test_dashboard_results_pages_honor_configured_base_path(tmp_path: Path) -> N
 
     jobs_page = client.get("/dashboard/results")
     assert jobs_page.status_code == 200
-    assert "/blink/dashboard/results/zzz" in jobs_page.text
+    assert "/blink/dashboard/results/zzz?task_type=crawl" in jobs_page.text
 
     run_page = client.get(f"/dashboard/results/zzz/runs/{run_id}?include_category=client&exclude_status=403")
     assert run_page.status_code == 200

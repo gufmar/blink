@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -18,6 +19,7 @@ def build_trigger(
     task: ScheduleTaskConfig,
     *,
     timezone_name: str,
+    not_before: datetime | None = None,
 ) -> IntervalTrigger | CronTrigger:
     """Return an APScheduler trigger for ``task`` using ``timezone_name`` for cron."""
     try:
@@ -34,7 +36,7 @@ def build_trigger(
         seconds = int(delta.total_seconds())
         if seconds <= 0:
             raise ValueError("interval must be positive")
-        return IntervalTrigger(seconds=seconds, timezone=tz, jitter=jitter)
+        return IntervalTrigger(seconds=seconds, timezone=tz, jitter=jitter, start_date=not_before)
 
     if mode == "cron":
         fields = expr.split()
@@ -49,6 +51,7 @@ def build_trigger(
             day_of_week=day_of_week,
             timezone=tz,
             jitter=jitter,
+            start_date=not_before,
         )
 
     raise ValueError(f"unsupported schedule mode: {mode!r}")

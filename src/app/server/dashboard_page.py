@@ -326,34 +326,41 @@ def _status_cell(rt: dict[str, Any]) -> str:
 
 
 def render_results_jobs_html(payload: dict[str, Any], *, links: dict[str, str]) -> str:
-    """Render job list + latest run summary."""
-    jobs = list(payload.get("jobs") or [])
+    """Render task-type list + latest run summary."""
+    rows_data = list(payload.get("rows") or payload.get("jobs") or [])
 
-    def row_for(job: dict[str, Any]) -> str:
-        latest = job.get("latest_run") or {}
+    def row_for(row: dict[str, Any]) -> str:
+        latest = row.get("latest_run") or {}
+        task_type = str(row.get("task_type") or "crawl")
+        if task_type == "link_check":
+            total = latest.get("checked_total")
+            latest_metric = total if total is not None else "—"
+        else:
+            latest_metric = latest.get("pages_visited") if latest else "—"
         return f"""<tr>
-    <td class="mono"><a href="{esc(job.get("details_url", ""))}">{esc(job.get("job_id", ""))}</a></td>
-    <td>{esc(job.get("name", ""))}</td>
-    <td>{esc("yes" if job.get("enabled") else "no")}</td>
+    <td class="mono"><a href="{esc(row.get("details_url", ""))}">{esc(row.get("job_id", ""))}</a></td>
+    <td>{esc(row.get("name", ""))}</td>
+    <td>{esc(task_type)}</td>
+    <td>{esc("yes" if row.get("enabled") else "no")}</td>
     <td class="mono">{esc(latest.get("run_id") if latest else "—")}</td>
     <td class="mono">{esc(latest.get("started_at") if latest else "—")}</td>
-    <td class="mono">{esc(latest.get("pages_failed") if latest else "—")}</td>
-    <td class="mono">{esc(latest.get("links_discovered") if latest else "—")}</td>
+    <td class="mono">{esc(latest_metric)}</td>
   </tr>"""
 
-    rows = "\n".join(row_for(job) for job in jobs) if jobs else ""
-    empty_row = '<tr><td colspan="7" class="empty">No job files found.</td></tr>'
+    rows = "\n".join(row_for(row) for row in rows_data) if rows_data else ""
+    empty_row = '<tr><td colspan="7" class="empty">No scheduled task rows found.</td></tr>'
     return _render_results_shell(
-        title="Blink results · Jobs",
+        title="Blink results · Tasks",
         heading="Blink results",
-        subtitle="Browse jobs and recent crawl/link-check outcomes.",
+        subtitle="Browse scheduled crawl/link-check tasks and latest outcomes.",
         nav_links=[
+            ("Main dashboard", links.get("main_dashboard", "")),
             ("Schedule", links.get("schedule", "")),
             ("Jobs JSON", links.get("jobs_json", "")),
             ("Health", links.get("health", "")),
         ],
-        panel_title="Jobs overview",
-        table_headers=["Job", "Name", "Enabled", "Latest run", "Started", "Pages failed", "Links discovered"],
+        panel_title="Task results overview",
+        table_headers=["Job", "Name", "Task type", "Enabled", "Latest run", "Started", "Visited/Checked"],
         table_rows=rows if rows else empty_row,
         footer_link=links.get("refresh", ""),
         footer_label="Refresh",
@@ -363,13 +370,22 @@ def render_results_jobs_html(payload: dict[str, Any], *, links: dict[str, str]) 
 def render_results_job_html(
     *,
     job: dict[str, Any],
+    task_type: str,
     run_rows: list[dict[str, Any]],
     links: dict[str, str],
 ) -> str:
-    """Render one job's run history table."""
+    """Render one job+task type run history table."""
 
     def row_for(run: dict[str, Any]) -> str:
         started = esc(run.get("started_at") or "—")
+        if task_type == "link_check":
+            return f"""<tr>
+    <td class="mono"><a href="{esc(run.get("details_url", ""))}">{started}</a></td>
+    <td class="mono">{esc(run.get("run_id", ""))}</td>
+    <td class="mono">{esc(run.get("checked_total") if run.get("checked_total") is not None else "—")}</td>
+    <td class="mono">{esc(run.get("failed_total") if run.get("failed_total") is not None else "—")}</td>
+    <td class="mono">{esc(run.get("ignored_total") if run.get("ignored_total") is not None else "—")}</td>
+  </tr>"""
         return f"""<tr>
     <td class="mono"><a href="{esc(run.get("details_url", ""))}">{started}</a></td>
     <td class="mono">{esc(run.get("run_id", ""))}</td>
@@ -380,18 +396,24 @@ def render_results_job_html(
   </tr>"""
 
     rows = "\n".join(row_for(run) for run in run_rows) if run_rows else ""
-    empty_row = '<tr><td colspan="6" class="empty">No runs available for this job yet.</td></tr>'
+    empty_colspan = "5" if task_type == "link_check" else "6"
+    empty_row = f'<tr><td colspan="{empty_colspan}" class="empty">No runs available for this task yet.</td></tr>'
+    if task_type == "link_check":
+        table_headers = ["Checked at", "Crawl run id", "Checked", "Failed", "Ignored"]
+    else:
+        table_headers = ["Started", "Run id", "Finished", "Pages visited", "Pages failed", "Links discovered"]
     return _render_results_shell(
-        title=f"Blink results · {esc(job.get('job_id', 'job'))}",
-        heading=f"Job results · {esc(job.get('job_id', ''))}",
+        title=f"Blink results · {esc(job.get('job_id', 'job'))} · {esc(task_type)}",
+        heading=f"Job results · {esc(job.get('job_id', ''))} · {esc(task_type)}",
         subtitle=f"{esc(job.get('name', ''))} ({esc('enabled' if job.get('enabled') else 'disabled')})",
         nav_links=[
+            ("Main dashboard", links.get("main_dashboard", "")),
             ("Back to jobs", links.get("jobs_index", "")),
             ("Runs JSON", links.get("runs_json", "")),
             ("Schedule", links.get("schedule", "")),
         ],
         panel_title="Run history",
-        table_headers=["Started", "Run id", "Finished", "Pages visited", "Pages failed", "Links discovered"],
+        table_headers=table_headers,
         table_rows=rows if rows else empty_row,
         footer_link=links.get("refresh", ""),
         footer_label="Refresh",
@@ -577,6 +599,7 @@ def render_results_run_html(
         heading=f"Run detail · {esc(job.get('job_id', ''))}",
         subtitle=f"Started {esc(run.get('started_at') or '—')} · Finished {esc(run.get('finished_at') or '—')}",
         nav_links=[
+            ("Main dashboard", links.get("main_dashboard", "")),
             ("Back to job", links.get("job", "")),
             ("Run JSON", links.get("run_json", "")),
             ("Jobs", links.get("jobs_index", "")),
