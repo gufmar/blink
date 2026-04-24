@@ -65,7 +65,15 @@ def _setup_job_with_data(tmp_path: Path, job_id: str = "zzz") -> tuple[Path, int
         is_internal=False,
         anchor_text="Broken external",
     )
-    check_target = repo.list_links_for_check(run_id, limit=1)[0]
+    repo.add_link(
+        run_id=run_id,
+        source_url="https://example.org",
+        target_url="https://ignored.example.net",
+        is_internal=False,
+        anchor_text="Ignored external",
+    )
+    check_targets = {row.target_url: row for row in repo.list_links_for_check(run_id, limit=10)}
+    check_target = check_targets["https://broken.example.net"]
     repo.add_link_check_result(
         crawl_link_id=check_target.link_id,
         crawl_run_id=run_id,
@@ -74,6 +82,18 @@ def _setup_job_with_data(tmp_path: Path, job_id: str = "zzz") -> tuple[Path, int
         ok=False,
         error_message="not found",
         error_category="client",
+    )
+    ignored_target = check_targets["https://ignored.example.net"]
+    repo.add_link_check_result(
+        crawl_link_id=ignored_target.link_id,
+        crawl_run_id=run_id,
+        target_url=ignored_target.target_url,
+        status_code=403,
+        ok=False,
+        error_message="cloudflare",
+        error_category="client",
+        decision_state="ignored",
+        decision_reason="link_check.ignore.http_status:403",
     )
     repo.add_link_ignore_rule(
         job_id=job_id,
@@ -109,6 +129,9 @@ def test_api_results_endpoints(tmp_path: Path) -> None:
     assert detail_payload["run"]["run_id"] == run_id
     assert detail_payload["failed_links"][0]["target_url"] == "https://broken.example.net"
     assert "https://example.org" in detail_payload["failed_links"][0]["source_pages"]
+    assert detail_payload["failed_overview"]["failed_total"] == 1
+    assert detail_payload["failed_overview"]["ignored_total"] == 1
+    assert detail_payload["ignored_links"][0]["target_url"] == "https://ignored.example.net"
 
 
 def test_dashboard_results_pages(tmp_path: Path) -> None:
@@ -130,6 +153,8 @@ def test_dashboard_results_pages(tmp_path: Path) -> None:
     assert run_page.status_code == 200
     assert "Failed link-check results" in run_page.text
     assert "https://broken.example.net" in run_page.text
+    assert "https://ignored.example.net" in run_page.text
+    assert "Ignored link-check results (latest per target)" in run_page.text
     assert "Run start" in run_page.text
     assert "Ignored external links" in run_page.text
     assert "Apply filters" in run_page.text

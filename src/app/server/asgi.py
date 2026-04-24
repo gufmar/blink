@@ -99,6 +99,21 @@ def _query_list(request: Request, key: str) -> list[str]:
     return out
 
 
+def _is_ignored_link_check_result(row: Any) -> bool:
+    return str(getattr(row, "decision_state", "") or "") == "ignored"
+
+
+def _split_failed_and_ignored_link_results(rows: list[Any]) -> tuple[list[Any], list[Any]]:
+    failed_rows: list[Any] = []
+    ignored_rows: list[Any] = []
+    for row in rows:
+        if _is_ignored_link_check_result(row):
+            ignored_rows.append(row)
+        else:
+            failed_rows.append(row)
+    return failed_rows, ignored_rows
+
+
 def _load_job_entries(jobs_root: Path) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     for job_path in sorted(jobs_root.glob("*.job.json")):
@@ -240,8 +255,9 @@ async def api_results_run_detail(request: Request) -> JSONResponse:
         exclude_category = _query_list(request, "exclude_category")
 
         failed_links_all = repo.list_latest_failed_link_check_results(run_id, limit=2000)
+        active_failed_all, ignored_failed_all = _split_failed_and_ignored_link_results(failed_links_all)
         failed_links: list[Any] = []
-        for row in failed_links_all:
+        for row in active_failed_all:
             status_value = "none" if row.status_code is None else str(row.status_code)
             category_value = str(row.error_category or "uncategorized")
             if include_status and status_value not in include_status:
@@ -254,11 +270,13 @@ async def api_results_run_detail(request: Request) -> JSONResponse:
                 continue
             failed_links.append(row)
 
-        sources = repo.list_source_page_refs_for_targets(run_id, [row.target_url for row in failed_links])
+        failed_targets = [row.target_url for row in failed_links]
+        ignored_targets = [row.target_url for row in ignored_failed_all]
+        sources = repo.list_source_page_refs_for_targets(run_id, [*failed_targets, *ignored_targets])
         failed_pages = repo.list_crawled_pages(run_id, only_failed=True, limit=200)
         counts = repo.get_distinct_link_counts()
         category_counts: dict[str, int] = {}
-        for row in failed_links_all:
+        for row in active_failed_all:
             key = str(row.error_category or "uncategorized")
             category_counts[key] = category_counts.get(key, 0) + 1
         history = repo.list_run_history(job_id, limit=50)
@@ -267,18 +285,12 @@ async def api_results_run_detail(request: Request) -> JSONResponse:
         per_run_counts: dict[int, dict[str, int]] = {run_id: category_counts}
         for prev_run_id in previous_run_ids:
             prev_rows = repo.list_latest_failed_link_check_results(prev_run_id, limit=2000)
+            prev_active, _prev_ignored = _split_failed_and_ignored_link_results(prev_rows)
             prev_counts: dict[str, int] = {}
-            for row in prev_rows:
+            for row in prev_active:
                 key = str(row.error_category or "uncategorized")
                 prev_counts[key] = prev_counts.get(key, 0) + 1
             per_run_counts[prev_run_id] = prev_counts
-        ignored_impacts = repo.list_ignore_rule_impacts(job_id=job_id, run_id=run_id, active_only=True, limit=2000)
-        ignored_by_target: dict[str, list[str]] = {}
-        for impact in ignored_impacts:
-            if impact.target_url not in ignored_by_target:
-                ignored_by_target[impact.target_url] = []
-            if impact.source_page_url and impact.source_page_url not in ignored_by_target[impact.target_url]:
-                ignored_by_target[impact.target_url].append(impact.source_page_url)
         return JSONResponse(
             {
                 "job": job,
@@ -295,7 +307,8 @@ async def api_results_run_detail(request: Request) -> JSONResponse:
                     "external_links_total": counts["external_urls_distinct"],
                 },
                 "failed_overview": {
-                    "failed_total": len(failed_links_all),
+                    "failed_total": len(active_failed_all),
+                    "ignored_total": len(ignored_failed_all),
                     "by_category": category_counts,
                     "per_run_category_counts": per_run_counts,
                     "comparison_run_ids": [run_id, *previous_run_ids],
@@ -329,10 +342,15 @@ async def api_results_run_detail(request: Request) -> JSONResponse:
                 ],
                 "ignored_links": [
                     {
-                        "target_url": target_url,
-                        "source_pages": source_pages,
+                        "target_url": row.target_url,
+                        "status_code": row.status_code,
+                        "error_category": row.error_category,
+                        "error_message": row.error_message,
+                        "checked_at": row.checked_at,
+                        "decision_reason": row.decision_reason,
+                        "source_pages": [ref.source_page_url for ref in sources.get(row.target_url, [])],
                     }
-                    for target_url, source_pages in sorted(ignored_by_target.items())
+                    for row in ignored_failed_all
                 ],
             }
         )
@@ -410,8 +428,9 @@ async def dashboard_results_run(request: Request) -> HTMLResponse:
         include_category = _query_list(request, "include_category")
         exclude_category = _query_list(request, "exclude_category")
         failed_links_all = repo.list_latest_failed_link_check_results(run_id, limit=2000)
+        active_failed_all, ignored_failed_all = _split_failed_and_ignored_link_results(failed_links_all)
         failed_links: list[Any] = []
-        for row in failed_links_all:
+        for row in active_failed_all:
             status_value = "none" if row.status_code is None else str(row.status_code)
             category_value = str(row.error_category or "uncategorized")
             if include_status and status_value not in include_status:
@@ -424,12 +443,14 @@ async def dashboard_results_run(request: Request) -> HTMLResponse:
                 continue
             failed_links.append(row)
         failed_pages = repo.list_crawled_pages(run_id, only_failed=True, limit=200)
-        sources = repo.list_source_page_refs_for_targets(run_id, [row.target_url for row in failed_links])
+        failed_targets = [row.target_url for row in failed_links]
+        ignored_targets = [row.target_url for row in ignored_failed_all]
+        sources = repo.list_source_page_refs_for_targets(run_id, [*failed_targets, *ignored_targets])
         counts = repo.get_distinct_link_counts()
         category_counts: dict[str, int] = {}
         status_options: set[str] = set()
         category_options: set[str] = set()
-        for row in failed_links_all:
+        for row in active_failed_all:
             category_key = str(row.error_category or "uncategorized")
             category_counts[category_key] = category_counts.get(category_key, 0) + 1
             status_options.add("none" if row.status_code is None else str(row.status_code))
@@ -443,18 +464,12 @@ async def dashboard_results_run(request: Request) -> HTMLResponse:
         per_run_counts: dict[int, dict[str, int]] = {run_id: dict(category_counts)}
         for prev_run_id in comparison_run_ids[1:]:
             prev_rows = repo.list_latest_failed_link_check_results(prev_run_id, limit=2000)
+            prev_active, _prev_ignored = _split_failed_and_ignored_link_results(prev_rows)
             prev_counts: dict[str, int] = {}
-            for row in prev_rows:
+            for row in prev_active:
                 key = str(row.error_category or "uncategorized")
                 prev_counts[key] = prev_counts.get(key, 0) + 1
             per_run_counts[prev_run_id] = prev_counts
-        ignored_impacts = repo.list_ignore_rule_impacts(job_id=job_id, run_id=run_id, active_only=True, limit=2000)
-        ignored_by_target: dict[str, list[str]] = {}
-        for impact in ignored_impacts:
-            if impact.target_url not in ignored_by_target:
-                ignored_by_target[impact.target_url] = []
-            if impact.source_page_url and impact.source_page_url not in ignored_by_target[impact.target_url]:
-                ignored_by_target[impact.target_url].append(impact.source_page_url)
     finally:
         _close_repo(repo_and_conn)
 
@@ -496,7 +511,8 @@ async def dashboard_results_run(request: Request) -> HTMLResponse:
             "external_links_total": counts["external_urls_distinct"],
         },
         failed_summary={
-            "failed_total": len(failed_links_all),
+            "failed_total": len(active_failed_all),
+            "ignored_total": len(ignored_failed_all),
             "by_category": category_counts,
             "per_run_category_counts": per_run_counts,
             "comparison_run_ids": comparison_run_ids,
@@ -536,12 +552,17 @@ async def dashboard_results_run(request: Request) -> HTMLResponse:
         ],
         ignored_links=[
             {
-                "target_url": target_url,
-                "target_href": target_url,
-                "source_pages": source_pages,
-                "source_page_hrefs": source_pages,
+                "target_url": row.target_url,
+                "target_href": row.target_url,
+                "status_code": row.status_code,
+                "error_category": row.error_category,
+                "error_message": row.error_message,
+                "checked_at": row.checked_at,
+                "decision_reason": row.decision_reason,
+                "source_pages": [ref.source_page_url for ref in sources.get(row.target_url, [])],
+                "source_page_hrefs": [ref.source_page_url for ref in sources.get(row.target_url, [])],
             }
-            for target_url, source_pages in sorted(ignored_by_target.items())
+            for row in ignored_failed_all
         ],
         links={
             "job": _path_for(request, "dashboard_results_job", job_id=job_id),

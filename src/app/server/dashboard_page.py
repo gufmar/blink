@@ -424,6 +424,7 @@ def render_results_run_html(
   <div class="metric"><div class="value">{esc(totals.get("pages_total"))}</div><div class="label">Pages covered <span class="info-icon" title="Distinct internal pages currently known for this job DB.">(i)</span></div></div>
   <div class="metric"><div class="value">{esc(totals.get("external_links_total"))}</div><div class="label">External links <span class="info-icon" title="Distinct external target URLs currently known for this job DB.">(i)</span></div></div>
   <div class="metric"><div class="value">{esc(failed_summary.get("failed_total"))}</div><div class="label">Failed links <span class="info-icon" title="Latest failed link-check targets in this run before filtering.">(i)</span></div></div>
+  <div class="metric"><div class="value">{esc(failed_summary.get("ignored_total", 0))}</div><div class="label">Ignored links <span class="info-icon" title="Latest link-check targets suppressed by ignore rules (status/category/message/domain).">(i)</span></div></div>
 </section>
 """
     column_labels = [f"run {rid}" for rid in comparison_run_ids]
@@ -504,12 +505,17 @@ def render_results_run_html(
     ignored_link_rows = "\n".join(
         f"""<tr>
     <td class="mono"><a href="{esc(item.get("target_href", item.get("target_url", "")))}" target="_blank" rel="noopener noreferrer">{esc(item.get("target_url", ""))}</a></td>
+    <td class="mono">{esc(item.get("status_code") if item.get("status_code") is not None else "—")}</td>
+    <td>{esc(item.get("error_category") or "—")}</td>
+    <td>{esc(item.get("decision_reason") or "—")}</td>
+    <td>{esc(item.get("error_message") or "—")}</td>
+    <td class="mono">{esc(item.get("checked_at") or "—")}</td>
     <td class="source-col">{_render_link_list(item.get("source_page_hrefs") or item.get("source_pages") or [])}</td>
   </tr>"""
         for item in ignored_links
     )
     if not ignored_link_rows:
-        ignored_link_rows = '<tr><td colspan="2" class="empty">No ignored external links matched for this run.</td></tr>'
+        ignored_link_rows = '<tr><td colspan="7" class="empty">No ignored link-check results for this run.</td></tr>'
 
     body_extra = f"""
 {run_stats}
@@ -559,9 +565,9 @@ def render_results_run_html(
   </table>
 </section>
 <section class="panel" aria-label="Ignored external links" style="margin-top: 1rem;">
-  <div class="panel-head">Ignored external links (from job ignore rules)</div>
+  <div class="panel-head">Ignored link-check results (latest per target)</div>
   <table>
-    <thead><tr><th>Target URL</th><th>Source pages</th></tr></thead>
+    <thead><tr><th>Target URL</th><th>Status</th><th>Category</th><th>Reason</th><th>Error</th><th>Checked at</th><th>Source pages</th></tr></thead>
     <tbody>{ignored_link_rows}</tbody>
   </table>
 </section>
