@@ -2250,3 +2250,239 @@ class CrawlRepository:
             )
             for row in rows
         ]
+
+    def list_crawl_runs_for_purge(
+        self,
+        *,
+        job_id: str,
+        run_id: int,
+        and_older: bool,
+    ) -> list[CrawlRunRecord]:
+        """Return crawl runs targeted by a purge invocation, ordered by id ASC."""
+        if and_older:
+            query = """
+                SELECT id, started_at, finished_at, pages_visited, pages_failed, links_discovered
+                FROM crawl_runs
+                WHERE job_id = ? AND id <= ?
+                ORDER BY id ASC
+            """
+        else:
+            query = """
+                SELECT id, started_at, finished_at, pages_visited, pages_failed, links_discovered
+                FROM crawl_runs
+                WHERE job_id = ? AND id = ?
+                ORDER BY id ASC
+            """
+        rows = self._connection.execute(query, (job_id, run_id)).fetchall()
+        return [
+            CrawlRunRecord(
+                run_id=int(row["id"]),
+                started_at=str(row["started_at"]),
+                finished_at=str(row["finished_at"]) if row["finished_at"] is not None else None,
+                pages_visited=int(row["pages_visited"]),
+                pages_failed=int(row["pages_failed"]),
+                links_discovered=int(row["links_discovered"]),
+            )
+            for row in rows
+        ]
+
+    def list_link_check_runs_for_purge(
+        self,
+        *,
+        job_id: str,
+        run_id: int,
+        and_older: bool,
+    ) -> list[LinkCheckRunRecord]:
+        """Return link-check runs targeted by a purge invocation, ordered by id ASC."""
+        if and_older:
+            query = """
+                SELECT
+                    id, job_id, based_on_crawl_run_id, started_at, finished_at,
+                    checked_total, passed_total, failed_total, errored_total, ignored_total
+                FROM link_check_runs
+                WHERE job_id = ? AND id <= ?
+                ORDER BY id ASC
+            """
+        else:
+            query = """
+                SELECT
+                    id, job_id, based_on_crawl_run_id, started_at, finished_at,
+                    checked_total, passed_total, failed_total, errored_total, ignored_total
+                FROM link_check_runs
+                WHERE job_id = ? AND id = ?
+                ORDER BY id ASC
+            """
+        rows = self._connection.execute(query, (job_id, run_id)).fetchall()
+        return [
+            LinkCheckRunRecord(
+                run_id=int(row["id"]),
+                job_id=str(row["job_id"]),
+                based_on_crawl_run_id=int(row["based_on_crawl_run_id"]),
+                started_at=str(row["started_at"]),
+                finished_at=str(row["finished_at"]) if row["finished_at"] is not None else None,
+                checked_total=int(row["checked_total"] or 0),
+                passed_total=int(row["passed_total"] or 0),
+                failed_total=int(row["failed_total"] or 0),
+                errored_total=int(row["errored_total"] or 0),
+                ignored_total=int(row["ignored_total"] or 0),
+            )
+            for row in rows
+        ]
+
+    def get_purge_preview_counts_crawl(self, run_ids: list[int]) -> dict[str, int]:
+        """Count rows that will cascade-delete when the given crawl_runs are removed."""
+        empty = {
+            "crawl_runs": 0,
+            "crawl_pages": 0,
+            "crawl_links": 0,
+            "run_pages": 0,
+            "run_external_links": 0,
+            "run_page_external_links": 0,
+            "link_check_runs": 0,
+            "link_check_results": 0,
+            "link_check_screenshots": 0,
+        }
+        if not run_ids:
+            return empty
+        placeholders = ", ".join(["?"] * len(run_ids))
+        params = tuple(run_ids)
+        counts = dict(empty)
+        counts["crawl_runs"] = len(run_ids)
+        for table in ("crawl_pages", "crawl_links", "run_pages", "run_external_links", "run_page_external_links"):
+            row = self._connection.execute(
+                f"SELECT COUNT(*) AS n FROM {table} WHERE run_id IN ({placeholders})",
+                params,
+            ).fetchone()
+            counts[table] = int(row["n"]) if row else 0
+        row = self._connection.execute(
+            f"SELECT COUNT(*) AS n FROM link_check_runs WHERE based_on_crawl_run_id IN ({placeholders})",
+            params,
+        ).fetchone()
+        counts["link_check_runs"] = int(row["n"]) if row else 0
+        row = self._connection.execute(
+            f"SELECT COUNT(*) AS n FROM link_check_results WHERE crawl_run_id IN ({placeholders})",
+            params,
+        ).fetchone()
+        counts["link_check_results"] = int(row["n"]) if row else 0
+        row = self._connection.execute(
+            f"SELECT COUNT(*) AS n FROM link_check_screenshots WHERE crawl_run_id IN ({placeholders})",
+            params,
+        ).fetchone()
+        counts["link_check_screenshots"] = int(row["n"]) if row else 0
+        return counts
+
+    def get_purge_preview_counts_link_check(self, lc_run_ids: list[int]) -> dict[str, int]:
+        """Count rows that will cascade-delete when the given link_check_runs are removed."""
+        empty = {
+            "link_check_runs": 0,
+            "link_check_results": 0,
+            "link_check_screenshots": 0,
+        }
+        if not lc_run_ids:
+            return empty
+        placeholders = ", ".join(["?"] * len(lc_run_ids))
+        params = tuple(lc_run_ids)
+        counts = dict(empty)
+        counts["link_check_runs"] = len(lc_run_ids)
+        row = self._connection.execute(
+            f"SELECT COUNT(*) AS n FROM link_check_results WHERE link_check_run_id IN ({placeholders})",
+            params,
+        ).fetchone()
+        counts["link_check_results"] = int(row["n"]) if row else 0
+        row = self._connection.execute(
+            f"SELECT COUNT(*) AS n FROM link_check_screenshots WHERE link_check_run_id IN ({placeholders})",
+            params,
+        ).fetchone()
+        counts["link_check_screenshots"] = int(row["n"]) if row else 0
+        return counts
+
+    def list_artifact_files_for_crawl_runs(self, run_ids: list[int]) -> list[str]:
+        """Return artifact filenames that will be orphaned when the given crawl_runs are removed."""
+        if not run_ids:
+            return []
+        placeholders = ", ".join(["?"] * len(run_ids))
+        rows = self._connection.execute(
+            f"""
+            SELECT artifact_file
+            FROM link_check_screenshots
+            WHERE crawl_run_id IN ({placeholders})
+              AND artifact_file IS NOT NULL
+              AND TRIM(artifact_file) != ''
+            """,
+            tuple(run_ids),
+        ).fetchall()
+        return [str(row["artifact_file"]) for row in rows]
+
+    def list_artifact_files_for_link_check_runs(self, lc_run_ids: list[int]) -> list[str]:
+        """Return artifact filenames that will be orphaned when the given link_check_runs are removed."""
+        if not lc_run_ids:
+            return []
+        placeholders = ", ".join(["?"] * len(lc_run_ids))
+        rows = self._connection.execute(
+            f"""
+            SELECT artifact_file
+            FROM link_check_screenshots
+            WHERE link_check_run_id IN ({placeholders})
+              AND artifact_file IS NOT NULL
+              AND TRIM(artifact_file) != ''
+            """,
+            tuple(lc_run_ids),
+        ).fetchall()
+        return [str(row["artifact_file"]) for row in rows]
+
+    def count_link_alerts_referencing_runs(self, *, job_id: str, run_ids: list[int]) -> int:
+        """Count link_alerts whose last_reported_run_id points at any of these crawl runs."""
+        if not run_ids:
+            return 0
+        placeholders = ", ".join(["?"] * len(run_ids))
+        row = self._connection.execute(
+            f"""
+            SELECT COUNT(*) AS n
+            FROM link_alerts
+            WHERE job_id = ?
+              AND last_reported_run_id IN ({placeholders})
+            """,
+            (job_id, *run_ids),
+        ).fetchone()
+        return int(row["n"]) if row else 0
+
+    def null_link_alert_last_run_for_runs(self, *, job_id: str, run_ids: list[int]) -> int:
+        """NULL out link_alerts.last_reported_run_id for stale references to deleted runs."""
+        if not run_ids:
+            return 0
+        placeholders = ", ".join(["?"] * len(run_ids))
+        cursor = self._connection.execute(
+            f"""
+            UPDATE link_alerts
+            SET last_reported_run_id = NULL
+            WHERE job_id = ?
+              AND last_reported_run_id IN ({placeholders})
+            """,
+            (job_id, *run_ids),
+        )
+        self._connection.commit()
+        return int(cursor.rowcount or 0)
+
+    def delete_crawl_runs(self, run_ids: list[int]) -> None:
+        """Delete crawl runs by id; relies on PRAGMA foreign_keys=ON for cascades."""
+        if not run_ids:
+            return
+        self._connection.execute("PRAGMA foreign_keys = ON")
+        placeholders = ", ".join(["?"] * len(run_ids))
+        self._connection.execute(
+            f"DELETE FROM crawl_runs WHERE id IN ({placeholders})",
+            tuple(run_ids),
+        )
+        self._connection.commit()
+
+    def delete_link_check_runs(self, lc_run_ids: list[int]) -> None:
+        """Delete link-check runs by id; relies on PRAGMA foreign_keys=ON for cascades."""
+        if not lc_run_ids:
+            return
+        self._connection.execute("PRAGMA foreign_keys = ON")
+        placeholders = ", ".join(["?"] * len(lc_run_ids))
+        self._connection.execute(
+            f"DELETE FROM link_check_runs WHERE id IN ({placeholders})",
+            tuple(lc_run_ids),
+        )
+        self._connection.commit()

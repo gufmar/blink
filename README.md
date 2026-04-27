@@ -167,6 +167,37 @@ blink crawl explore --job jobs/cardano.org.job.json --max-pages 0 --max-runtime-
 
 List commands support `--format json`. Use `--search` or `--search-by` for URL substring matching.
 
+## Maintenance: purging old runs
+
+Use `blink jobs purge` to delete crawl or link-check runs (and their cascaded data) from a single job's SQLite DB. By default the command prints a preview table and a per-table cascade summary, then asks for confirmation. Pass `--yes` to skip the prompt.
+
+```bash
+blink jobs purge --job jobs/cardano.org.job.json --task-type crawl --run-id 42
+blink jobs purge --job jobs/cardano.org.job.json --task-type crawl --run-id 42 --and-older --yes
+blink jobs purge --job jobs/cardano.org.job.json --task-type link-check --run-id 17 --and-older
+```
+
+Flags:
+
+- `--task-type {crawl|link-check}` — which run kind `--run-id` refers to.
+- `--run-id N` — the row in `crawl_runs` (for `crawl`) or `link_check_runs` (for `link-check`).
+- `--and-older` — also delete every run of the same task-type whose id is `<= --run-id`.
+- `--yes` — skip the interactive `y/N` confirmation.
+- `--db PATH` — operate on a non-default SQLite path.
+- `--artifacts-dir PATH` — non-default location for on-disk PNG cleanup.
+
+What gets deleted:
+
+- `crawl` purge cascades through `crawl_pages`, `crawl_links`, `run_pages`, `run_external_links`, `run_page_external_links`, the `run_*_appeared/disappeared` diff tables, every `link_check_runs` row built on top of the deleted crawl run, and their `link_check_results`/`link_check_screenshots` rows.
+- `link-check` purge cascades only through that link-check run's `link_check_results` and `link_check_screenshots`. The parent crawl run is left untouched.
+- On-disk PNGs referenced by deleted `link_check_screenshots` rows are removed from `jobs/<job_id>/artifacts/`.
+
+What survives a purge (job-level state, not bound to runs):
+
+- `link_ignore_rules` — manual ignore rules persist.
+- `link_alerts` (including paused/`ignored` Slack lifecycle buckets), `link_alert_events`, `link_failure_state`, `link_retest_queue` — all preserved. Stale `link_alerts.last_reported_run_id` references to deleted crawl runs are NULLed so they don't dangle.
+- Master `pages` and `external_links` rows survive (their `*_run_id` columns use `ON DELETE SET NULL`).
+
 ## Crawl Hardening (Step 6)
 
 `crawl run` and `crawl explore` now use one shared Playwright browser context per run, so cookies/session state persist across page navigations in that run.

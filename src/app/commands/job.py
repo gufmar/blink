@@ -650,3 +650,194 @@ def db_stats(
     rows.append({"metric": "internal_urls_distinct", "value": str(distinct["internal_urls_distinct"])})
     rows.append({"metric": "db_file_size", "value": f"{human} ({thousands} B)"})
     _print_db_stats(rows, output_format=output_format)
+
+
+_PURGE_TASK_TYPES = {"crawl", "link-check"}
+
+
+def _delete_artifact_files(artifacts_dir: Path, filenames: list[str]) -> tuple[int, int]:
+    """Delete unique artifact files; return (deleted, missing). Tolerates missing files."""
+    deleted = 0
+    missing = 0
+    seen: set[str] = set()
+    for name in filenames:
+        if name in seen:
+            continue
+        seen.add(name)
+        candidate = artifacts_dir / name
+        try:
+            candidate.unlink()
+            deleted += 1
+        except FileNotFoundError:
+            missing += 1
+        except OSError:
+            missing += 1
+    return deleted, missing
+
+
+@jobs_app.command("purge")
+def purge(
+    job: str = typer.Option(..., "--job", help="Path to job JSON file."),
+    task_type: str = typer.Option(..., "--task-type", help="crawl|link-check"),
+    run_id: int = typer.Option(..., "--run-id", min=1, help="Run id (crawl_runs.id or link_check_runs.id depending on --task-type)."),
+    and_older: bool = typer.Option(
+        False,
+        "--and-older",
+        help="Also delete every run of this task-type whose id is <= --run-id (oldest-first cleanup).",
+    ),
+    yes: bool = typer.Option(False, "--yes", help="Skip the interactive confirmation prompt."),
+    db: Path | None = typer.Option(None, "--db", help="SQLite DB path override."),
+    artifacts_dir: Path | None = typer.Option(
+        None,
+        "--artifacts-dir",
+        help="Override the artifacts directory used for on-disk PNG cleanup (defaults to the job's artifacts dir).",
+    ),
+) -> None:
+    """Permanently delete crawl or link-check runs and cascaded data from the job DB.
+
+    Cascades via SQLite foreign keys (PRAGMA foreign_keys=ON):
+      crawl    -> crawl_pages, crawl_links, run_pages, run_external_links,
+                  run_page_external_links, run_*_appeared/disappeared,
+                  link_check_runs, link_check_results, link_check_screenshots
+      link-check -> link_check_results, link_check_screenshots
+
+    Job-level link state survives a purge: link_ignore_rules, link_alerts
+    (including paused/ignored buckets), link_alert_events, link_failure_state,
+    link_retest_queue. Stale link_alerts.last_reported_run_id values are NULLed.
+
+    On-disk PNG artifacts referenced by deleted link_check_screenshots rows
+    are also removed from jobs/<job_id>/artifacts/.
+    """
+    if task_type not in _PURGE_TASK_TYPES:
+        typer.secho(
+            f"Invalid --task-type {task_type!r}. Use one of: {', '.join(sorted(_PURGE_TASK_TYPES))}.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    try:
+        config = load_effective_job_config(job)
+    except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
+        typer.secho(f"Failed to load job config: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+    job_id = config["meta"]["job_id"]
+    paths = build_job_paths(job_id)
+    db_path = _resolve_db_path(config, db)
+    artifacts_root = artifacts_dir.resolve() if artifacts_dir is not None else paths.artifacts_dir
+    connection = connect_sqlite(db_path)
+    initialize_schema(connection)
+    repository = CrawlRepository(connection)
+    try:
+        if task_type == "crawl":
+            target_runs = repository.list_crawl_runs_for_purge(
+                job_id=job_id, run_id=run_id, and_older=and_older
+            )
+            if not target_runs:
+                typer.secho(
+                    f"No crawl run with id {run_id} found for job_id={job_id}.",
+                    fg=typer.colors.YELLOW,
+                )
+                raise typer.Exit(code=1)
+            run_ids = [record.run_id for record in target_runs]
+            cascade_counts = repository.get_purge_preview_counts_crawl(run_ids)
+            artifact_files = repository.list_artifact_files_for_crawl_runs(run_ids)
+            alerts_to_null = repository.count_link_alerts_referencing_runs(
+                job_id=job_id, run_ids=run_ids
+            )
+            run_rows = [
+                {
+                    "run_id": rec.run_id,
+                    "started_at": rec.started_at,
+                    "finished_at": rec.finished_at or "",
+                    "pages_visited": rec.pages_visited,
+                    "pages_failed": rec.pages_failed,
+                    "links_discovered": rec.links_discovered,
+                }
+                for rec in target_runs
+            ]
+        else:
+            target_lc_runs = repository.list_link_check_runs_for_purge(
+                job_id=job_id, run_id=run_id, and_older=and_older
+            )
+            if not target_lc_runs:
+                typer.secho(
+                    f"No link-check run with id {run_id} found for job_id={job_id}.",
+                    fg=typer.colors.YELLOW,
+                )
+                raise typer.Exit(code=1)
+            run_ids = [record.run_id for record in target_lc_runs]
+            cascade_counts = repository.get_purge_preview_counts_link_check(run_ids)
+            artifact_files = repository.list_artifact_files_for_link_check_runs(run_ids)
+            alerts_to_null = 0
+            run_rows = [
+                {
+                    "run_id": rec.run_id,
+                    "based_on_crawl_run_id": rec.based_on_crawl_run_id,
+                    "started_at": rec.started_at,
+                    "finished_at": rec.finished_at or "",
+                    "checked_total": rec.checked_total,
+                    "failed_total": rec.failed_total,
+                    "errored_total": rec.errored_total,
+                }
+                for rec in target_lc_runs
+            ]
+
+        unique_artifact_files = sorted(set(artifact_files))
+        scope_label = (
+            f"crawl run id={run_id}{' and older' if and_older else ''}"
+            if task_type == "crawl"
+            else f"link-check run id={run_id}{' and older' if and_older else ''}"
+        )
+        typer.secho(
+            f"Purge plan for job_id={job_id} ({scope_label}):",
+            fg=typer.colors.CYAN,
+        )
+        typer.echo(f"db={db_path}")
+        _print_numbered_items(run_rows, output_format="table")
+        cascade_rows = [
+            {"table": name, "rows_to_delete": str(value)}
+            for name, value in sorted(cascade_counts.items())
+        ]
+        cascade_rows.append({"table": "artifact_files_to_delete", "rows_to_delete": str(len(unique_artifact_files))})
+        if task_type == "crawl":
+            cascade_rows.append(
+                {"table": "link_alerts.last_reported_run_id_nulled", "rows_to_delete": str(alerts_to_null)}
+            )
+        _render_table(["table", "rows_to_delete"], [(row["table"], row["rows_to_delete"]) for row in cascade_rows])
+        typer.secho(
+            "Job-level link state preserved: link_ignore_rules, link_alerts, "
+            "link_alert_events, link_failure_state, link_retest_queue.",
+            fg=typer.colors.CYAN,
+        )
+
+        if not yes:
+            confirmed = typer.confirm("Proceed with purge?", default=False)
+            if not confirmed:
+                typer.secho("Aborted. No data was deleted.", fg=typer.colors.YELLOW)
+                raise typer.Exit(code=1)
+
+        if task_type == "crawl":
+            nulled = repository.null_link_alert_last_run_for_runs(
+                job_id=job_id, run_ids=run_ids
+            )
+            repository.delete_crawl_runs(run_ids)
+        else:
+            nulled = 0
+            repository.delete_link_check_runs(run_ids)
+    finally:
+        connection.close()
+
+    deleted_files, missing_files = _delete_artifact_files(artifacts_root, unique_artifact_files)
+
+    typer.secho(
+        (
+            f"Purge complete: task_type={task_type} "
+            f"deleted_runs={len(run_ids)} "
+            f"deleted_run_ids={run_ids} "
+            f"artifact_files_deleted={deleted_files} "
+            f"artifact_files_missing={missing_files} "
+            f"link_alerts_nulled={nulled}"
+        ),
+        fg=typer.colors.GREEN,
+    )
