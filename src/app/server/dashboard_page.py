@@ -416,10 +416,11 @@ def render_results_job_html(
         if value is None:
             return "—"
         if total <= 0:
-            return f'<span title="{esc(label)} ratio unavailable: total external URLs is 0">{esc(value)}</span>'
+            return f'<span title="{esc(label)} ratio unavailable: total external URLs is 0">{esc(value)} (0%)</span>'
         ratio = (float(value) / float(total)) * 100.0
-        tooltip = f"{label} ratio: {value}/{total} = {ratio:.2f}%"
-        return f'<span title="{esc(tooltip)}">{esc(value)}</span>'
+        ratio_int = int(round(ratio))
+        tooltip = f"{label} ratio: {value}/{total} = {ratio_int}%"
+        return f'<span title="{esc(tooltip)}">{esc(value)} ({esc(ratio_int)}%)</span>'
 
     def row_for(run: dict[str, Any]) -> str:
         started = esc(_fmt_dt(run.get("started_at")))
@@ -553,9 +554,9 @@ def render_results_run_html(
 <section class="metrics" aria-label="Run summary">
   <div class="metric"><div class="value">{esc(run.get("pages_visited"))}</div><div class="label">Pages visited <span class="info-icon" title="Number of pages crawled in this run.">(i)</span></div></div>
   <div class="metric"><div class="value">{esc(totals.get("pages_total"))}</div><div class="label">Pages covered <span class="info-icon" title="Distinct internal pages currently known for this job DB.">(i)</span></div></div>
-  <div class="metric"><div class="value">{esc(totals.get("external_links_total"))}</div><div class="label">External links <span class="info-icon" title="Distinct external target URLs currently known for this job DB.">(i)</span></div></div>
-  <div class="metric"><div class="value">{esc(failed_summary.get("failed_total"))}</div><div class="label">Failed links <span class="info-icon" title="Latest failed link-check targets in this run before filtering.">(i)</span></div></div>
-  <div class="metric"><div class="value">{esc(failed_summary.get("ignored_total", 0))}</div><div class="label">Ignored links <span class="info-icon" title="Latest link-check targets suppressed by ignore rules (status/category/message/domain).">(i)</span></div></div>
+  <div class="metric"><div class="value">{esc(_fmt_count_with_ratio(totals.get("external_links_total"), totals.get("pages_total")))}</div><div class="label">External links <span class="info-icon" title="Distinct external target URLs currently known for this job DB. Ratio is vs pages covered.">(i)</span></div></div>
+  <div class="metric"><div class="value">{esc(_fmt_count_with_ratio(failed_summary.get("failed_total"), totals.get("external_links_total")))}</div><div class="label">Failed links <span class="info-icon" title="Latest failed link-check targets in this run before filtering. Ratio is vs external links.">(i)</span></div></div>
+  <div class="metric"><div class="value">{esc(_fmt_count_with_ratio(failed_summary.get("ignored_total", 0), totals.get("external_links_total")))}</div><div class="label">Ignored links <span class="info-icon" title="Latest link-check targets suppressed by ignore rules (status/category/message/domain). Ratio is vs external links.">(i)</span></div></div>
   {based_on_metric}
 </section>
 """
@@ -577,12 +578,10 @@ def render_results_run_html(
     if not category_rows:
         category_rows = '<tr><td colspan="4" class="empty">No failed external links in this run.</td></tr>'
 
-    status_options = list(filters.get("status_options") or [])
-    category_options = list(filters.get("category_options") or [])
+    status_options = sorted(list(filters.get("status_options") or []))
+    category_options = sorted(list(filters.get("category_options") or []))
     include_status_selected = set(filters.get("include_status") or [])
-    exclude_status_selected = set(filters.get("exclude_status") or [])
     include_category_selected = set(filters.get("include_category") or [])
-    exclude_category_selected = set(filters.get("exclude_category") or [])
     filter_action = esc(filters.get("filter_action") or "")
     clear_filters_url = esc(filters.get("clear_filters_url") or "")
 
@@ -591,35 +590,24 @@ def render_results_run_html(
         f"<option value=\"{esc(v)}\"{' selected' if v in include_status_selected else ''}>{esc(v)}</option>"
         for v in status_options
     )
-    exclude_status_option_html = []
-    exclude_status_option_html.extend(
-        f"<option value=\"{esc(v)}\"{' selected' if v in exclude_status_selected else ''}>{esc(v)}</option>"
-        for v in status_options
-    )
     include_category_option_html = []
     include_category_option_html.extend(
         f"<option value=\"{esc(v)}\"{' selected' if v in include_category_selected else ''}>{esc(v)}</option>"
         for v in category_options
     )
-    exclude_category_option_html = []
-    exclude_category_option_html.extend(
-        f"<option value=\"{esc(v)}\"{' selected' if v in exclude_category_selected else ''}>{esc(v)}</option>"
-        for v in category_options
-    )
 
     failed_link_rows = "\n".join(
         f"""<tr>
-    <td class="mono"><a href="{esc(item.get("target_href", item.get("target_url", "")))}" target="_blank" rel="noopener noreferrer">{esc(item.get("target_url", ""))}</a></td>
+    <td class="source-col">{_render_target_and_sources(item)}</td>
     <td class="mono">{esc(item.get("status_code") if item.get("status_code") is not None else "—")}</td>
     <td>{esc(item.get("error_category") or "—")}</td>
     <td>{esc(item.get("error_message") or "—")}</td>
     <td class="mono">{esc(item.get("checked_at") or "—")}</td>
-    <td class="source-col">{_render_link_list(item.get("source_page_hrefs") or item.get("source_pages") or [])}</td>
   </tr>"""
         for item in failed_links
     )
     if not failed_link_rows:
-        failed_link_rows = '<tr><td colspan="6" class="empty">No failed links for this run.</td></tr>'
+        failed_link_rows = '<tr><td colspan="5" class="empty">No failed links for this run.</td></tr>'
 
     failed_page_rows = "\n".join(
         f"""<tr>
@@ -636,18 +624,17 @@ def render_results_run_html(
 
     ignored_link_rows = "\n".join(
         f"""<tr>
-    <td class="mono"><a href="{esc(item.get("target_href", item.get("target_url", "")))}" target="_blank" rel="noopener noreferrer">{esc(item.get("target_url", ""))}</a></td>
+    <td class="source-col">{_render_target_and_sources(item)}</td>
     <td class="mono">{esc(item.get("status_code") if item.get("status_code") is not None else "—")}</td>
     <td>{esc(item.get("error_category") or "—")}</td>
     <td>{esc(item.get("decision_reason") or "—")}</td>
     <td>{esc(item.get("error_message") or "—")}</td>
     <td class="mono">{esc(item.get("checked_at") or "—")}</td>
-    <td class="source-col">{_render_link_list(item.get("source_page_hrefs") or item.get("source_pages") or [])}</td>
   </tr>"""
         for item in ignored_links
     )
     if not ignored_link_rows:
-        ignored_link_rows = '<tr><td colspan="7" class="empty">No ignored link-check results for this run.</td></tr>'
+        ignored_link_rows = '<tr><td colspan="6" class="empty">No ignored link-check results for this run.</td></tr>'
 
     body_extra = f"""
 {run_stats}
@@ -658,34 +645,29 @@ def render_results_run_html(
     <tbody>{category_rows}</tbody>
   </table>
 </section>
-<section class="panel" aria-label="Failed links">
-  <div class="panel-head">Failed link-check results (latest per target)</div>
+<section class="panel" aria-label="Global filters">
+  <div class="panel-head">Global filters</div>
   <div class="filters-row">
     <form method="get" action="{filter_action}" class="filters-form">
       <label>Include status
         <select name="include_status" multiple size="4">{''.join(include_status_option_html)}</select>
       </label>
-      <label>Exclude status
-        <select name="exclude_status" multiple size="4">{''.join(exclude_status_option_html)}</select>
-      </label>
       <label>Include category
         <select name="include_category" multiple size="4">{''.join(include_category_option_html)}</select>
-      </label>
-      <label>Exclude category
-        <select name="exclude_category" multiple size="4">{''.join(exclude_category_option_html)}</select>
       </label>
       <button type="submit">Apply filters</button>
       <a href="{clear_filters_url}">Clear</a>
     </form>
   </div>
-  <div class="table-scroll">
+</section>
+<section class="panel" aria-label="Failed links" style="margin-top: 1rem;">
+  <div class="panel-head">Failed link-check results (latest per target)</div>
   <table class="sticky-head">
     <thead>
-      <tr><th>Target URL</th><th>Status</th><th>Category</th><th>Error</th><th>Checked at</th><th>Source pages</th></tr>
+      <tr><th>Target URL</th><th>Status</th><th>Category</th><th>Error</th><th>Checked at</th></tr>
     </thead>
     <tbody>{failed_link_rows}</tbody>
   </table>
-  </div>
 </section>
 <section class="panel" aria-label="Failed crawl pages" style="margin-top: 1rem;">
   <div class="panel-head">Failed crawl pages</div>
@@ -699,7 +681,7 @@ def render_results_run_html(
 <section class="panel" aria-label="Ignored external links" style="margin-top: 1rem;">
   <div class="panel-head">Ignored link-check results (latest per target)</div>
   <table>
-    <thead><tr><th>Target URL</th><th>Status</th><th>Category</th><th>Reason</th><th>Error</th><th>Checked at</th><th>Source pages</th></tr></thead>
+    <thead><tr><th>Target URL</th><th>Status</th><th>Category</th><th>Reason</th><th>Error</th><th>Checked at</th></tr></thead>
     <tbody>{ignored_link_rows}</tbody>
   </table>
 </section>
@@ -833,8 +815,10 @@ def _shared_styles() -> str:
   .filters-row { padding: 0.75rem 1rem; border-bottom: 1px solid var(--border); background: #fff; }
   .filters-form { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
   .filters-form label { font-size: 0.8rem; color: var(--muted); }
-  .filters-form select { margin-left: 0.35rem; min-width: 10rem; }
-  .table-scroll { max-height: 28rem; overflow: auto; }
+  .filters-form select { margin-left: 0.35rem; min-width: 10rem; border-radius: 8px; border: 1px solid var(--border); padding: 0.2rem 0.25rem; background: #fff; }
+  .target-url { font-weight: 700; margin-bottom: 0.35rem; }
+  .source-list { margin-top: 0.2rem; }
+  .source-link { display: block; margin-top: 0.15rem; }
   .sticky-head thead th { position: sticky; top: 0; z-index: 1; }
   .mono { font-family: ui-monospace, "Cascadia Code", "SF Mono", Menlo, monospace; font-size: 0.78rem; }
   footer { margin-top: 2rem; padding: 1rem 0; font-size: 0.75rem; color: var(--muted); text-align: center; }
@@ -880,3 +864,32 @@ def _render_link_list(urls: list[str]) -> str:
         f'<a href="{esc(url)}" target="_blank" rel="noopener noreferrer">{esc(url)}</a>'
         for url in urls
     )
+
+
+def _render_target_and_sources(item: dict[str, Any]) -> str:
+    target_url = str(item.get("target_url", "") or "")
+    target_href = str(item.get("target_href", target_url) or target_url)
+    source_urls = list(item.get("source_page_hrefs") or item.get("source_pages") or [])
+    source_rows = "".join(
+        f'<a class="source-link mono" href="{esc(url)}" target="_blank" rel="noopener noreferrer">&#8632; {esc(url)}</a>'
+        for url in source_urls
+    )
+    if not source_rows:
+        source_rows = '<span class="mono">—</span>'
+    return (
+        f'<div class="target-url"><a href="{esc(target_href)}" target="_blank" rel="noopener noreferrer">{esc(target_url)}</a></div>'
+        f'<div class="source-list">{source_rows}</div>'
+    )
+
+
+def _fmt_count_with_ratio(value: object, total: object) -> str:
+    try:
+        count = int(value) if value is not None else 0
+    except (TypeError, ValueError):
+        return "—"
+    try:
+        base = int(total) if total is not None else 0
+    except (TypeError, ValueError):
+        base = 0
+    ratio = int(round((count / base) * 100.0)) if base > 0 else 0
+    return f"{count} ({ratio}%)"

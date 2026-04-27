@@ -17,6 +17,7 @@ from app.schedule.registry import ScheduleRegistryEntry, load_registry
 from app.schedule.runner import run_scheduled_task
 from app.schedule.state import SchedulerStateStore
 from app.schedule.triggers import build_trigger
+from app.schedule.triggers import interval_seconds
 
 TaskType = Literal["crawl", "link_check"]
 
@@ -25,6 +26,22 @@ APSCHEDULER_JOB_PREFIX = "blink_sched"
 
 def _iso_utc_z() -> str:
     return datetime.now(tz=UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _parse_iso_utc(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    normalized = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 class BlinkSchedulerService:
@@ -86,7 +103,18 @@ class BlinkSchedulerService:
         cfg = entry.config
         sch = cfg["schedule"]
         delay = max(0, int(task["startup_delay_seconds"]))
-        not_before = datetime.now(tz=UTC) + timedelta(seconds=delay)
+        now = datetime.now(tz=UTC)
+        not_before = now + timedelta(seconds=delay)
+        # Preserve interval cadence over service restarts by aligning the next run
+        # to the last known completion time when available.
+        if task["mode"] == "interval":
+            st = self._store.get(cfg["meta"]["job_id"], task_type)
+            last_end = _parse_iso_utc(st.last_end_at if st else None)
+            if last_end is not None:
+                cadence_seconds = interval_seconds(task)
+                resumed_not_before = last_end + timedelta(seconds=cadence_seconds)
+                if resumed_not_before > not_before:
+                    not_before = resumed_not_before
         try:
             trigger = build_trigger(task, timezone_name=sch["timezone"], not_before=not_before)
         except (TypeError, ValueError) as exc:
