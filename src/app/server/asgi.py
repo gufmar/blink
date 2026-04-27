@@ -32,6 +32,7 @@ from app.persistence.sqlite import connect_sqlite, initialize_schema
 from app.runtime.job_paths import build_job_paths
 from app.schedule.service import BlinkSchedulerService
 from app.server.dashboard_page import (
+    render_job_task_history_html,
     render_results_job_html,
     render_results_jobs_html,
     render_results_run_html,
@@ -267,10 +268,37 @@ def _serialize_link_check_history(job_id: str, repo: CrawlRepository | None, *, 
 async def schedule_dashboard(request: Request) -> HTMLResponse:
     svc: BlinkSchedulerService = request.app.state.scheduler_service
     payload = svc.build_schedule_payload()
-    for task in payload.get("tasks") or []:
-        job_id = str(task.get("job_id") or "")
-        if job_id:
-            task["results_url"] = _path_for(request, "dashboard_results_job", job_id=job_id)
+    jobs_root: Path = request.app.state.jobs_root
+    jobs = _load_job_entries(jobs_root)
+    jobs_summary: list[dict[str, Any]] = []
+    for job in jobs:
+        job_id = str(job["job_id"])
+        repo_and_conn = _open_repo_if_exists(_db_path_for_job(jobs_root, job_id))
+        repo = repo_and_conn[0] if repo_and_conn else None
+        try:
+            crawl_history = _serialize_run_history(job_id, repo, limit=1)
+            link_history = _serialize_link_check_history(job_id, repo, limit=1)
+        finally:
+            _close_repo(repo_and_conn)
+        latest_crawl = crawl_history[0] if crawl_history else None
+        latest_link = link_history[0] if link_history else None
+        crawl_history_url = _path_for(request, "dashboard_results_job_history", job_id=job_id)
+        latest_link_url = ""
+        if latest_link and latest_link.get("run_id") is not None:
+            latest_link_url = (
+                f"{_path_for(request, 'dashboard_results_run', job_id=job_id, run_id=int(latest_link['run_id']))}"
+                "?task_type=link_check"
+            )
+        jobs_summary.append(
+            {
+                **job,
+                "latest_crawl": latest_crawl,
+                "latest_link_check": latest_link,
+                "crawl_history_url": crawl_history_url,
+                "latest_link_check_url": latest_link_url,
+            }
+        )
+    payload["jobs_summary"] = jobs_summary
     page = render_schedule_dashboard_html(
         payload,
         links={
@@ -279,6 +307,48 @@ async def schedule_dashboard(request: Request) -> HTMLResponse:
             "slack_health": _path_for(request, "slack_health"),
             "results_index": _path_for(request, "dashboard_results_jobs"),
             "schedule_refresh": _path_for(request, "dashboard_schedule"),
+            **_branding_links(request),
+        },
+    )
+    return HTMLResponse(page)
+
+
+async def dashboard_results_job_history(request: Request) -> HTMLResponse:
+    jobs_root: Path = request.app.state.jobs_root
+    job_id = str(request.path_params["job_id"])
+    job = _job_entry_by_id(jobs_root, job_id)
+    if job is None:
+        return HTMLResponse("Job not found", status_code=404)
+    repo_and_conn = _open_repo_if_exists(_db_path_for_job(jobs_root, job_id))
+    repo = repo_and_conn[0] if repo_and_conn else None
+    try:
+        crawl_runs = _serialize_run_history(job_id, repo, limit=200)
+        link_runs = _serialize_link_check_history(job_id, repo, limit=400)
+    finally:
+        _close_repo(repo_and_conn)
+    by_crawl_id: dict[int, list[dict[str, Any]]] = {}
+    for row in link_runs:
+        crawl_run_id = int(row.get("based_on_crawl_run_id") or 0)
+        by_crawl_id.setdefault(crawl_run_id, []).append(row)
+    for crawl in crawl_runs:
+        crawl_id = int(crawl.get("run_id") or 0)
+        crawl["details_url"] = (
+            f"{_path_for(request, 'dashboard_results_run', job_id=job_id, run_id=crawl_id)}?task_type=crawl"
+        )
+        related = by_crawl_id.get(crawl_id, [])
+        for rel in related:
+            rel["details_url"] = (
+                f"{_path_for(request, 'dashboard_results_run', job_id=job_id, run_id=int(rel['run_id']))}"
+                "?task_type=link_check"
+            )
+        crawl["link_checks"] = sorted(related, key=lambda r: str(r.get("started_at") or ""), reverse=True)
+    page = render_job_task_history_html(
+        job=job,
+        crawl_runs=crawl_runs,
+        links={
+            "main_dashboard": _path_for(request, "dashboard_schedule"),
+            "jobs_index": _path_for(request, "dashboard_results_jobs"),
+            "refresh": _path_for(request, "dashboard_results_job_history", job_id=job_id),
             **_branding_links(request),
         },
     )
@@ -515,14 +585,34 @@ async def api_results_run_detail(request: Request) -> JSONResponse:
 
 
 async def dashboard_results_jobs(request: Request) -> HTMLResponse:
-    payload = (await api_results_jobs(request)).body
-    data = json.loads(payload.decode("utf-8"))
-    rows = list(data.get("task_rows") or [])
-    for row in rows:
-        job_id = str(row.get("job_id") or "")
-        row["details_url"] = _path_for(request, "dashboard_results_job", job_id=job_id) if job_id else ""
+    jobs_root: Path = request.app.state.jobs_root
+    jobs = _load_job_entries(jobs_root)
+    rows: list[dict[str, Any]] = []
+    for job in jobs:
+        job_id = str(job["job_id"])
+        repo_and_conn = _open_repo_if_exists(_db_path_for_job(jobs_root, job_id))
+        repo = repo_and_conn[0] if repo_and_conn else None
+        try:
+            crawl_history = _serialize_run_history(job_id, repo, limit=1)
+            link_history = _serialize_link_check_history(job_id, repo, limit=1)
+        finally:
+            _close_repo(repo_and_conn)
+        latest_crawl = crawl_history[0] if crawl_history else None
+        latest_link = link_history[0] if link_history else None
+        row = {
+            **job,
+            "latest_crawl": latest_crawl,
+            "latest_link_check": latest_link,
+            "crawl_history_url": _path_for(request, "dashboard_results_job_history", job_id=job_id),
+            "latest_link_check_url": (
+                f"{_path_for(request, 'dashboard_results_run', job_id=job_id, run_id=int(latest_link['run_id']))}?task_type=link_check"
+                if latest_link and latest_link.get("run_id") is not None
+                else ""
+            ),
+        }
+        rows.append(row)
     page = render_results_jobs_html(
-        {"rows": rows},
+        {"jobs_summary": rows},
         links={
             "main_dashboard": _path_for(request, "dashboard_schedule"),
             "schedule": _path_for(request, "dashboard_schedule"),
@@ -587,7 +677,7 @@ async def dashboard_results_job(request: Request) -> HTMLResponse:
         run_rows=run_rows,
         links={
             "main_dashboard": _path_for(request, "dashboard_schedule"),
-            "jobs_index": _path_for(request, "dashboard_results_jobs"),
+            "jobs_index": _path_for(request, "dashboard_results_job_history", job_id=job_id),
             "runs_json": runs_json_url,
             "schedule": _path_for(request, "dashboard_schedule"),
             "refresh": refresh_url,
@@ -796,13 +886,13 @@ async def dashboard_results_run(request: Request) -> HTMLResponse:
         ],
         links={
             "main_dashboard": _path_for(request, "dashboard_schedule"),
-            "job": _path_for(request, "dashboard_results_job", job_id=job_id),
+            "job": _path_for(request, "dashboard_results_job_history", job_id=job_id),
             "run_json": with_filters(
                 f"{_path_for(request, 'api_results_run_detail', job_id=job_id, run_id=run_id)}?task_type={task_type}",
                 include_status_q=include_status,
                 include_category_q=include_category,
             ),
-            "jobs_index": _path_for(request, "dashboard_results_jobs"),
+            "jobs_index": _path_for(request, "dashboard_results_job_history", job_id=job_id),
             "refresh": with_filters(
                 base_run_path,
                 include_status_q=include_status,
@@ -1050,6 +1140,12 @@ def build_app(
                 dashboard_results_job,
                 methods=["GET"],
                 name="dashboard_results_job",
+            ),
+            Route(
+                "/dashboard/results/{job_id}/history",
+                dashboard_results_job_history,
+                methods=["GET"],
+                name="dashboard_results_job_history",
             ),
             Route(
                 "/dashboard/results/{job_id}/runs/{run_id:int}",

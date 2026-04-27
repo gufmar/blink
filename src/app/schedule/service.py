@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import sqlite3
 import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -42,6 +43,27 @@ def _parse_iso_utc(value: str | None) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC)
+
+
+def _has_finished_crawl_run(jobs_root: Path, job_id: str) -> bool:
+    db_path = jobs_root / job_id / "db" / f"{job_id}.sqlite3"
+    if not db_path.exists():
+        return False
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM crawl_runs
+            WHERE job_id = ? AND finished_at IS NOT NULL
+            LIMIT 1
+            """,
+            (job_id,),
+        ).fetchone()
+        conn.close()
+        return row is not None
+    except sqlite3.Error:
+        return False
 
 
 class BlinkSchedulerService:
@@ -160,6 +182,9 @@ class BlinkSchedulerService:
 
         if is_start_blocked_by_maintenance(sch):
             logger.info("Skipping {} {} (maintenance window)", job_id, task_type)
+            return
+        if task_type == "link_check" and not _has_finished_crawl_run(self.jobs_root, job_id):
+            logger.info("Skipping {} {} (waiting for first finished crawl run)", job_id, task_type)
             return
 
         timeout = max(1, int(task["max_runtime_seconds"]))

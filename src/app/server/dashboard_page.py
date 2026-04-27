@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 
 def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, str]) -> str:
     """Build scheduler dashboard HTML using request-aware links."""
+    jobs_summary: list[dict[str, Any]] = list(payload.get("jobs_summary") or [])
     tasks: list[dict[str, Any]] = list(payload.get("tasks") or [])
     crawl_n = len(payload.get("crawl_tasks") or [])
     link_n = len(payload.get("link_check_tasks") or [])
@@ -20,29 +21,47 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
     def esc(s: object) -> str:
         return html.escape("" if s is None else str(s))
 
-    def row_for(t: dict[str, Any]) -> str:
-        rt = t.get("runtime") or {}
-        dec = t.get("declarative") or {}
-        cadence = f'{esc(dec.get("mode", ""))} · {esc(dec.get("expression", ""))}'
-        job_id = esc(t.get("job_id", ""))
-        results_url = str(t.get("results_url") or "")
-        job_cell = (
-            f'<a href="{esc(results_url)}" class="mono" title="Open job results">{job_id}</a>'
-            if results_url
-            else f'<span class="mono">{job_id}</span>'
+    def _fmt_line(kind: str, run: dict[str, Any] | None, url: str) -> str:
+        if kind == "crawl":
+            metric = run.get("pages_visited") if run else None
+            metric_label = "pages"
+        else:
+            metric = run.get("checked_total") if run else None
+            metric_label = "checked"
+        run_id = run.get("run_id") if run else None
+        started = run.get("started_at") if run else "—"
+        run_cell = (
+            f'<a href="{esc(url)}" class="mono">run {esc(run_id)}</a>' if (run_id is not None and url) else "—"
+        )
+        return (
+            f'<div class="job-line"><span class="badge badge-{esc("crawl" if kind == "crawl" else "link_check")}">{esc(kind)}</span> '
+            f'{run_cell} · <span class="mono">{esc(started or "—")}</span> · '
+            f'<span class="mono">{esc(metric if metric is not None else "—")} {esc(metric_label)}</span></div>'
+        )
+
+    def row_for(job_row: dict[str, Any]) -> str:
+        job_id = str(job_row.get("job_id") or "")
+        job_name = str(job_row.get("name") or "")
+        history_url = str(job_row.get("crawl_history_url") or "")
+        title_cell = (
+            f'<a href="{esc(history_url)}" class="mono">{esc(job_id)}</a> · {esc(job_name)}' if history_url else f'{esc(job_id)} · {esc(job_name)}'
+        )
+        crawl_line = _fmt_line("crawl", job_row.get("latest_crawl"), str(job_row.get("crawl_history_url") or ""))
+        link_line = _fmt_line(
+            "link-check",
+            job_row.get("latest_link_check"),
+            str(job_row.get("latest_link_check_url") or ""),
         )
         return f"""<tr>
-    <td>{job_cell}</td>
-    <td><span class="badge badge-{esc(t.get("task_type", ""))}">{esc(t.get("task_type", ""))}</span></td>
-    <td class="mono cadence">{cadence}</td>
-    <td class="mono time">{esc(rt.get("next_run_at") or "—")}</td>
-    <td class="mono time">{esc(rt.get("last_end_at") or "—")}</td>
-    <td class="mono">{esc(rt.get("last_exit_code") if rt.get("last_exit_code") is not None else "—")}</td>
-    <td>{_status_cell(rt)}</td>
+    <td>
+      <div class="job-title">{title_cell}</div>
+      {crawl_line}
+      {link_line}
+    </td>
   </tr>"""
 
-    rows = "\n".join(row_for(t) for t in sorted(tasks, key=_task_sort_key)) if tasks else ""
-    empty_row = '<tr><td colspan="7" class="empty">No enabled schedule tasks found under jobs_root.</td></tr>'
+    rows = "\n".join(row_for(r) for r in jobs_summary) if jobs_summary else ""
+    empty_row = '<tr><td class="empty">No enabled jobs found under jobs_root.</td></tr>'
 
     gen_at = datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
 
@@ -309,13 +328,7 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
       <table>
         <thead>
           <tr>
-            <th>Job</th>
-            <th>Type</th>
-            <th>Cadence</th>
-            <th>Next run</th>
-            <th>Last end</th>
-            <th>Exit</th>
-            <th>Status</th>
+            <th>Job task overview</th>
           </tr>
         </thead>
         <tbody>
@@ -349,41 +362,52 @@ def _status_cell(rt: dict[str, Any]) -> str:
 
 
 def render_results_jobs_html(payload: dict[str, Any], *, links: dict[str, str]) -> str:
-    """Render task-type list + latest run summary."""
-    rows_data = list(payload.get("rows") or payload.get("jobs") or [])
+    """Render job-centric results index (history-first navigation)."""
+    rows_data = list(payload.get("jobs_summary") or [])
+
+    def _line(kind: str, run: dict[str, Any] | None, url: str) -> str:
+        run = run or {}
+        metric = run.get("pages_visited") if kind == "crawl" else run.get("checked_total")
+        metric_label = "pages" if kind == "crawl" else "checked"
+        run_id = run.get("run_id")
+        run_cell = f'<a href="{esc(url)}" class="mono">run {esc(run_id)}</a>' if (run_id is not None and url) else "—"
+        return (
+            f'<div class="job-line"><span class="badge badge-{"crawl" if kind == "crawl" else "link_check"}">{esc(kind)}</span> '
+            f'{run_cell} · <span class="mono">{esc(run.get("started_at") or "—")}</span> · '
+            f'<span class="mono">{esc(metric if metric is not None else "—")} {esc(metric_label)}</span></div>'
+        )
 
     def row_for(row: dict[str, Any]) -> str:
-        latest = row.get("latest_run") or {}
-        task_type = str(row.get("task_type") or "crawl")
-        if task_type == "link_check":
-            total = latest.get("checked_total")
-            latest_metric = total if total is not None else "—"
-        else:
-            latest_metric = latest.get("pages_visited") if latest else "—"
+        history_url = str(row.get("crawl_history_url") or "")
+        title = (
+            f'<a href="{esc(history_url)}" class="mono">{esc(row.get("job_id", ""))}</a> · {esc(row.get("name", ""))}'
+            if history_url
+            else f'{esc(row.get("job_id", ""))} · {esc(row.get("name", ""))}'
+        )
+        crawl_line = _line("crawl", row.get("latest_crawl"), history_url)
+        link_line = _line("link-check", row.get("latest_link_check"), str(row.get("latest_link_check_url") or ""))
         return f"""<tr>
-    <td class="mono"><a href="{esc(row.get("details_url", ""))}">{esc(row.get("job_id", ""))}</a></td>
-    <td>{esc(row.get("name", ""))}</td>
-    <td>{esc(task_type)}</td>
-    <td>{esc("yes" if row.get("enabled") else "no")}</td>
-    <td class="mono">{esc(latest.get("run_id") if latest else "—")}</td>
-    <td class="mono">{esc(latest.get("started_at") if latest else "—")}</td>
-    <td class="mono">{esc(latest_metric)}</td>
+    <td>
+      <div class="job-title">{title}</div>
+      {crawl_line}
+      {link_line}
+    </td>
   </tr>"""
 
     rows = "\n".join(row_for(row) for row in rows_data) if rows_data else ""
-    empty_row = '<tr><td colspan="7" class="empty">No scheduled task rows found.</td></tr>'
+    empty_row = '<tr><td class="empty">No jobs with results found.</td></tr>'
     return _render_results_shell(
-        title="Blink results · Tasks",
+        title="Blink results · Jobs",
         heading="Blink results",
-        subtitle="Browse scheduled crawl/link-check tasks and latest outcomes.",
+        subtitle="Job-centric view: open crawl history, then drill into related link-check runs.",
         nav_links=[
             ("Main dashboard", links.get("main_dashboard", "")),
             ("Schedule", links.get("schedule", "")),
             ("Jobs JSON", links.get("jobs_json", "")),
             ("Health", links.get("health", "")),
         ],
-        panel_title="Task results overview",
-        table_headers=["Job", "Name", "Task type", "Enabled", "Latest run", "Started", "Visited/Checked"],
+        panel_title="Job overview",
+        table_headers=["Jobs"],
         table_rows=rows if rows else empty_row,
         footer_link=links.get("refresh", ""),
         footer_label="Refresh",
@@ -519,6 +543,57 @@ def render_results_job_html(
         footer_link=links.get("refresh", ""),
         footer_label="Refresh",
         body_extra=toggle_row,
+        branding_links=links,
+    )
+
+
+def render_job_task_history_html(
+    *,
+    job: dict[str, Any],
+    crawl_runs: list[dict[str, Any]],
+    links: dict[str, str],
+) -> str:
+    """Render crawl history with related link-check runs under each crawl."""
+
+    def _fmt(value: object) -> str:
+        return esc(value if value not in (None, "") else "—")
+
+    rows: list[str] = []
+    for crawl in crawl_runs:
+        crawl_rows = f"""<tr>
+    <td><span class="badge badge-crawl">crawl</span></td>
+    <td class="mono"><a href="{esc(crawl.get("details_url", ""))}">{_fmt(crawl.get("run_id"))}</a></td>
+    <td class="mono">{_fmt(crawl.get("started_at"))}</td>
+    <td class="mono">{_fmt(crawl.get("finished_at") or "ongoing")}</td>
+    <td class="mono">{_fmt(crawl.get("pages_visited"))}</td>
+    <td class="mono">{_fmt(crawl.get("pages_failed"))}</td>
+  </tr>"""
+        rows.append(crawl_rows)
+        for link_run in list(crawl.get("link_checks") or []):
+            rows.append(
+                f"""<tr>
+    <td><span class="badge badge-link_check">link-check</span></td>
+    <td class="mono"><a href="{esc(link_run.get("details_url", ""))}">{_fmt(link_run.get("run_id"))}</a></td>
+    <td class="mono">{_fmt(link_run.get("started_at"))}</td>
+    <td class="mono">{_fmt(link_run.get("finished_at") or "ongoing")}</td>
+    <td class="mono">{_fmt(link_run.get("checked_total"))}</td>
+    <td class="mono">{_fmt(link_run.get("failed_total"))}</td>
+  </tr>"""
+            )
+
+    return _render_results_shell(
+        title=f"Blink history · {esc(job.get('job_id', ''))}",
+        heading=f"Task history · {esc(job.get('job_id', ''))}",
+        subtitle=f"{esc(job.get('name', ''))} ({esc('enabled' if job.get('enabled') else 'disabled')})",
+        nav_links=[
+            ("Main dashboard", links.get("main_dashboard", "")),
+            ("Back to jobs", links.get("jobs_index", "")),
+        ],
+        panel_title="Crawl runs with related link-check runs",
+        table_headers=["Type", "Run id", "Started", "Finished", "Visited/Checked", "Failed"],
+        table_rows="".join(rows) if rows else '<tr><td colspan="6" class="empty">No run history available.</td></tr>',
+        footer_link=links.get("refresh", ""),
+        footer_label="Refresh",
         branding_links=links,
     )
 
@@ -793,6 +868,8 @@ def _shared_styles() -> str:
   .brand { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; }
   .brand-logo { width: 36px; height: 36px; object-fit: contain; border-radius: 8px; background: rgba(255, 255, 255, 0.14); padding: 4px; }
   .brand-name { font-size: 0.9rem; font-weight: 600; letter-spacing: 0.01em; opacity: 0.95; }
+  .job-title { font-weight: 700; margin-bottom: 0.25rem; }
+  .job-line { margin-top: 0.2rem; }
   .hero h1 { margin: 0 0 0.35rem; font-size: 1.65rem; font-weight: 700; letter-spacing: -0.02em; }
   .hero p { margin: 0; opacity: 0.92; font-size: 0.95rem; max-width: 42rem; }
   .nav { margin-top: 1rem; display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; font-size: 0.875rem; }
