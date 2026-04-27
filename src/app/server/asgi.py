@@ -297,15 +297,21 @@ async def schedule_dashboard(request: Request) -> HTMLResponse:
         external_total = int(counts.get("external_urls_distinct") or 0)
         failed_total = int(latest_link.get("failed_total") or 0) if latest_link else 0
         failed_ratio = int(round((failed_total / external_total) * 100.0)) if external_total > 0 else 0
+        ignored_total = int(latest_link.get("ignored_total") or 0) if latest_link else 0
+        ignored_ratio = int(round((ignored_total / external_total) * 100.0)) if external_total > 0 else 0
         job_meta[job_id] = {
             "job_name": str(job.get("name") or job_id),
             "history_url": crawl_history_url,
             "latest_crawl_url": latest_crawl_url,
             "latest_link_url": latest_link_url,
+            "latest_crawl": latest_crawl,
+            "latest_link": latest_link,
             "pages_total": int(counts.get("internal_urls_distinct") or 0),
             "external_total": external_total,
             "failed_total": failed_total,
             "failed_ratio": failed_ratio,
+            "ignored_total": ignored_total,
+            "ignored_ratio": ignored_ratio,
         }
     for task in payload.get("tasks") or []:
         job_id = str(task.get("job_id") or "")

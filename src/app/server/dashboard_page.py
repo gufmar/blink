@@ -48,10 +48,26 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
         details_url = str((task or {}).get("latest_crawl_url" if label == "last crawl" else "latest_link_url") or "")
         when = _fmt_dt_short(rt.get("last_end_at"))
         when_cell = f'<a href="{esc(details_url)}" class="mono">{esc(when)}</a>' if details_url and when != "—" else f'<span class="mono">{esc(when)}</span>'
+        if label == "last crawl":
+            latest_crawl = (task or {}).get("latest_crawl") or {}
+            metrics = (
+                f'pages: {esc(latest_crawl.get("pages_visited") if latest_crawl.get("pages_visited") is not None else "—")} · '
+                f'ignored: {esc((task or {}).get("ignored_total") if (task or {}).get("ignored_total") is not None else "—")} · '
+                f'ext.links: {esc((task or {}).get("external_total") if (task or {}).get("external_total") is not None else "—")}'
+            )
+        else:
+            latest_link = (task or {}).get("latest_link") or {}
+            metrics = (
+                f'tested: {esc(latest_link.get("checked_total") if latest_link.get("checked_total") is not None else "—")} · '
+                f'ignored: {esc((task or {}).get("ignored_total") if (task or {}).get("ignored_total") is not None else "—")} '
+                f'({esc((task or {}).get("ignored_ratio") if (task or {}).get("ignored_ratio") is not None else 0)}%) · '
+                f'failed: {esc((task or {}).get("failed_total") if (task or {}).get("failed_total") is not None else "—")} '
+                f'({esc((task or {}).get("failed_ratio") if (task or {}).get("failed_ratio") is not None else 0)}%)'
+            )
         return (
             f'<div class="job-line-grid"><span class="line-label">{esc(label)}:</span>'
             f'<span class="line-date">{when_cell}</span>'
-            f'<span class="line-mid mono">{esc(rt.get("last_exit_code") if rt.get("last_exit_code") is not None else "—")}</span>'
+            f'<span class="line-mid mono">{metrics}</span>'
             f'<span class="line-status">{_status_cell(rt)}</span></div>'
         )
 
@@ -63,7 +79,7 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
             f'<div class="job-line-grid"><span class="line-label">{esc(label)}:</span>'
             f'<span class="line-date mono">{esc(_fmt_dt_short(rt.get("next_run_at")))}</span>'
             f'<span class="line-mid mono">{cadence}</span>'
-            f'<span class="line-status">{_status_cell(rt)}</span></div>'
+            f'<span class="line-status">—</span></div>'
         )
 
     def row_for(job_row: dict[str, Any]) -> str:
