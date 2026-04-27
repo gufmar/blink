@@ -43,6 +43,25 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
             parsed = parsed.replace(tzinfo=UTC)
         return parsed.strftime("%Y-%m-%d %H:%M")
 
+    def _fmt_from_now(value: object) -> str:
+        if value is None or str(value).strip() == "":
+            return "—"
+        raw = str(value).strip()
+        normalized = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return "—"
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        now = datetime.now(tz=UTC)
+        delta_seconds = int((parsed - now).total_seconds())
+        if delta_seconds <= 0:
+            return "due now"
+        hours = delta_seconds // 3600
+        minutes = (delta_seconds % 3600) // 60
+        return f"{hours}:{minutes:02d} from now"
+
     def _line_last(label: str, task: dict[str, Any] | None) -> str:
         rt = (task or {}).get("runtime") or {}
         details_url = str((task or {}).get("latest_crawl_url" if label == "last crawl" else "latest_link_url") or "")
@@ -74,11 +93,13 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
     def _line_next(label: str, task: dict[str, Any] | None) -> str:
         rt = (task or {}).get("runtime") or {}
         dec = (task or {}).get("declarative") or {}
-        cadence = f'{esc(dec.get("mode", ""))} · {esc(dec.get("expression", ""))}' if task else "—"
+        expr = str(dec.get("expression") or "").strip() if task else ""
+        cadence = f"{expr} cadence" if expr else "—"
+        next_raw = rt.get("next_run_at")
         return (
             f'<div class="job-line-grid"><span class="line-label">{esc(label)}:</span>'
-            f'<span class="line-date mono">{esc(_fmt_dt_short(rt.get("next_run_at")))}</span>'
-            f'<span class="line-mid mono">{cadence}</span>'
+            f'<span class="line-date mono">{esc(_fmt_dt_short(next_raw))}</span>'
+            f'<span class="line-mid mono">{esc(cadence)} · {esc(_fmt_from_now(next_raw))}</span>'
             f'<span class="line-status">—</span></div>'
         )
 
@@ -88,15 +109,10 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
         history_url = str(job_row.get("history_url") or "")
         crawl_task = job_row.get("crawl")
         link_task = job_row.get("link_check")
-        pages_total = job_row.get("pages_total")
-        external_total = job_row.get("external_total")
-        failed_total = job_row.get("failed_total")
-        failed_ratio = job_row.get("failed_ratio")
         history_link = f'<a href="{esc(history_url)}">(history)</a>' if history_url else ""
         return f"""<tr>
     <td>
       <div class="job-title-row"><span class="job-title">{esc(job_name)}</span><span class="job-history">{history_link}</span></div>
-      <div class="job-summary mono">pages covered: {esc(pages_total if pages_total is not None else "—")} · external links: {esc(external_total if external_total is not None else "—")} · failed links: {esc(failed_total if failed_total is not None else "—")} ({esc(failed_ratio if failed_ratio is not None else 0)}%)</div>
       {_line_last("last crawl", crawl_task)}
       {_line_next("next crawl", crawl_task)}
       {_line_last("last check", link_task)}
@@ -191,11 +207,6 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
       color: var(--cardano-blue-light);
       text-decoration: underline;
       text-underline-offset: 2px;
-    }}
-    .job-summary {{
-      margin-bottom: 0.25rem;
-      color: var(--muted);
-      font-size: 0.78rem;
     }}
     .job-line-grid {{
       display: grid;
