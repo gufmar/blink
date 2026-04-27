@@ -10,7 +10,6 @@ from urllib.parse import urlsplit
 
 def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, str]) -> str:
     """Build scheduler dashboard HTML using request-aware links."""
-    jobs_summary: list[dict[str, Any]] = list(payload.get("jobs_summary") or [])
     tasks: list[dict[str, Any]] = list(payload.get("tasks") or [])
     crawl_n = len(payload.get("crawl_tasks") or [])
     link_n = len(payload.get("link_check_tasks") or [])
@@ -21,47 +20,52 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
     def esc(s: object) -> str:
         return html.escape("" if s is None else str(s))
 
-    def _fmt_line(kind: str, run: dict[str, Any] | None, url: str) -> str:
-        if kind == "crawl":
-            metric = run.get("pages_visited") if run else None
-            metric_label = "pages"
-        else:
-            metric = run.get("checked_total") if run else None
-            metric_label = "checked"
-        run_id = run.get("run_id") if run else None
-        started = run.get("started_at") if run else "—"
-        run_cell = (
-            f'<a href="{esc(url)}" class="mono">run {esc(run_id)}</a>' if (run_id is not None and url) else "—"
-        )
+    grouped: dict[str, dict[str, Any]] = {}
+    for t in tasks:
+        job_id = str(t.get("job_id") or "")
+        if not job_id:
+            continue
+        entry = grouped.setdefault(job_id, {"job_id": job_id, "crawl": None, "link_check": None})
+        task_type = str(t.get("task_type") or "")
+        if task_type in {"crawl", "link_check"}:
+            entry[task_type] = t
+
+    def _line_last(label: str, task: dict[str, Any] | None) -> str:
+        rt = (task or {}).get("runtime") or {}
         return (
-            f'<div class="job-line"><span class="badge badge-{esc("crawl" if kind == "crawl" else "link_check")}">{esc(kind)}</span> '
-            f'{run_cell} · <span class="mono">{esc(started or "—")}</span> · '
-            f'<span class="mono">{esc(metric if metric is not None else "—")} {esc(metric_label)}</span></div>'
+            f'<div class="job-line"><span class="line-label">{esc(label)}:</span> '
+            f'<span class="mono">{esc(rt.get("last_end_at") or "—")}</span> · '
+            f'<span class="mono">{esc(rt.get("last_exit_code") if rt.get("last_exit_code") is not None else "—")}</span> · '
+            f'{_status_cell(rt)}</div>'
+        )
+
+    def _line_next(label: str, task: dict[str, Any] | None) -> str:
+        rt = (task or {}).get("runtime") or {}
+        dec = (task or {}).get("declarative") or {}
+        cadence = f'{esc(dec.get("mode", ""))} · {esc(dec.get("expression", ""))}' if task else "—"
+        return (
+            f'<div class="job-line"><span class="line-label">{esc(label)}:</span> '
+            f'<span class="mono">{esc(rt.get("next_run_at") or "—")}</span> · '
+            f'<span class="mono">{cadence}</span> · '
+            f'{_status_cell(rt)}</div>'
         )
 
     def row_for(job_row: dict[str, Any]) -> str:
         job_id = str(job_row.get("job_id") or "")
-        job_name = str(job_row.get("name") or "")
-        history_url = str(job_row.get("crawl_history_url") or "")
-        title_cell = (
-            f'<a href="{esc(history_url)}" class="mono">{esc(job_id)}</a> · {esc(job_name)}' if history_url else f'{esc(job_id)} · {esc(job_name)}'
-        )
-        crawl_line = _fmt_line("crawl", job_row.get("latest_crawl"), str(job_row.get("crawl_history_url") or ""))
-        link_line = _fmt_line(
-            "link-check",
-            job_row.get("latest_link_check"),
-            str(job_row.get("latest_link_check_url") or ""),
-        )
+        crawl_task = job_row.get("crawl")
+        link_task = job_row.get("link_check")
         return f"""<tr>
     <td>
-      <div class="job-title">{title_cell}</div>
-      {crawl_line}
-      {link_line}
+      <div class="job-title">{esc(job_id)}</div>
+      {_line_last("last crawl", crawl_task)}
+      {_line_next("next crawl", crawl_task)}
+      {_line_last("last check", link_task)}
+      {_line_next("next check", link_task)}
     </td>
   </tr>"""
 
-    rows = "\n".join(row_for(r) for r in jobs_summary) if jobs_summary else ""
-    empty_row = '<tr><td class="empty">No enabled jobs found under jobs_root.</td></tr>'
+    rows = "\n".join(row_for(grouped[k]) for k in sorted(grouped.keys())) if grouped else ""
+    empty_row = '<tr><td class="empty">No enabled schedule tasks found under jobs_root.</td></tr>'
 
     gen_at = datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
 
@@ -129,6 +133,22 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
       font-weight: 600;
       letter-spacing: 0.01em;
       opacity: 0.95;
+    }}
+    .job-title {{
+      font-size: 1rem;
+      font-weight: 700;
+      margin-bottom: 0.35rem;
+      color: var(--cardano-blue);
+    }}
+    .job-line {{
+      margin-top: 0.2rem;
+      font-size: 0.82rem;
+    }}
+    .line-label {{
+      display: inline-block;
+      min-width: 6.8rem;
+      color: var(--muted);
+      font-weight: 600;
     }}
     .hero h1 {{
       margin: 0 0 0.35rem;
@@ -328,7 +348,7 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
       <table>
         <thead>
           <tr>
-            <th>Job task overview</th>
+            <th>Job</th>
           </tr>
         </thead>
         <tbody>
