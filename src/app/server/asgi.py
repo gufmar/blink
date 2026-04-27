@@ -88,7 +88,7 @@ def _branding_links(request: Request) -> dict[str, str]:
     static_root = Path(__file__).resolve().parent / "static" / "branding"
 
     def static_url(rel_path: str) -> str:
-        return _path_for(request, "static", path=rel_path)
+        return _path_for(request, "static", path=f"branding/{rel_path}")
 
     def pick_existing(paths: list[str]) -> str:
         for rel in paths:
