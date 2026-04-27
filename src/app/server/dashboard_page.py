@@ -807,7 +807,7 @@ def _shared_styles() -> str:
   .panel-head { padding: 1rem 1.25rem; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 1rem; color: var(--cardano-blue); }
   table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
   th { text-align: left; padding: 0.65rem 1rem; background: #f8fafc; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; font-size: 0.7rem; border-bottom: 1px solid var(--border); }
-  td { padding: 0.65rem 1rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  td { padding: 0.65rem 1rem; border-bottom: 1px solid var(--border); vertical-align: top; }
   tr:nth-child(even) td { background: #fafbfd; }
   tr:last-child td { border-bottom: none; }
   td.empty { text-align: center; color: var(--muted); padding: 2rem; }
@@ -818,7 +818,9 @@ def _shared_styles() -> str:
   .filters-form select { margin-left: 0.35rem; min-width: 10rem; border-radius: 8px; border: 1px solid var(--border); padding: 0.2rem 0.25rem; background: #fff; }
   .target-url { font-weight: 700; margin-bottom: 0.35rem; }
   .source-list { margin-top: 0.2rem; }
-  .source-link { display: block; margin-top: 0.15rem; }
+  .source-row { display: block; margin-top: 0.15rem; }
+  .source-arrow { margin-right: 0.2rem; color: var(--muted); }
+  .source-link { display: inline; }
   .sticky-head thead th { position: sticky; top: 0; z-index: 1; }
   .mono { font-family: ui-monospace, "Cascadia Code", "SF Mono", Menlo, monospace; font-size: 0.78rem; }
   footer { margin-top: 2rem; padding: 1rem 0; font-size: 0.75rem; color: var(--muted); text-align: center; }
@@ -871,7 +873,8 @@ def _render_target_and_sources(item: dict[str, Any]) -> str:
     target_href = str(item.get("target_href", target_url) or target_url)
     source_urls = list(item.get("source_page_hrefs") or item.get("source_pages") or [])
     source_rows = "".join(
-        f'<a class="source-link mono" href="{esc(url)}" target="_blank" rel="noopener noreferrer">&#8632; {esc(url)}</a>'
+        f'<span class="source-row"><span class="source-arrow" aria-hidden="true">&#8632;</span>'
+        f'<a class="source-link mono" href="{esc(url)}" target="_blank" rel="noopener noreferrer">{esc(url)}</a></span>'
         for url in source_urls
     )
     if not source_rows:
