@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 
 def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, str]) -> str:
@@ -689,7 +690,7 @@ def render_results_run_html(
     return _render_results_shell(
         title=f"Blink results · {esc(job.get('job_id', ''))} run {esc(run.get('run_id', ''))}",
         heading=f"Run detail · {esc(job.get('job_id', ''))}",
-        subtitle=f"Started {esc(run.get('started_at') or '—')} · Finished {esc(run.get('finished_at') or '—')}",
+        subtitle=f"{esc(job.get('name', ''))} ({esc('enabled' if job.get('enabled') else 'disabled')})",
         nav_links=[
             ("Main dashboard", links.get("main_dashboard", "")),
             ("Back to job", links.get("job", "")),
@@ -874,7 +875,7 @@ def _render_target_and_sources(item: dict[str, Any]) -> str:
     source_urls = list(item.get("source_page_hrefs") or item.get("source_pages") or [])
     source_rows = "".join(
         f'<span class="source-row"><span class="source-arrow" aria-hidden="true">&#8632;</span>'
-        f'<a class="source-link mono" href="{esc(url)}" target="_blank" rel="noopener noreferrer">{esc(url)}</a></span>'
+        f'<a class="source-link mono" href="{esc(url)}" target="_blank" rel="noopener noreferrer">{esc(_source_label(url))}</a></span>'
         for url in source_urls
     )
     if not source_rows:
@@ -883,6 +884,21 @@ def _render_target_and_sources(item: dict[str, Any]) -> str:
         f'<div class="target-url"><a href="{esc(target_href)}" target="_blank" rel="noopener noreferrer">{esc(target_url)}</a></div>'
         f'<div class="source-list">{source_rows}</div>'
     )
+
+
+def _source_label(url: str) -> str:
+    """Return compact label (path/query/fragment) for source URLs."""
+    raw = str(url or "").strip()
+    if not raw:
+        return "—"
+    parsed = urlsplit(raw)
+    if parsed.scheme and parsed.netloc:
+        path = (parsed.path or "").lstrip("/")
+        query = f"?{parsed.query}" if parsed.query else ""
+        fragment = f"#{parsed.fragment}" if parsed.fragment else ""
+        compact = f"{path}{query}{fragment}"
+        return compact or "/"
+    return raw.lstrip("/") or raw
 
 
 def _fmt_count_with_ratio(value: object, total: object) -> str:
