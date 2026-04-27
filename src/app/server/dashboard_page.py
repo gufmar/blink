@@ -30,13 +30,29 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
         if task_type in {"crawl", "link_check"}:
             entry[task_type] = t
 
+    def _fmt_dt_short(value: object) -> str:
+        if value is None or str(value).strip() == "":
+            return "—"
+        raw = str(value).strip()
+        normalized = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return raw
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.strftime("%Y-%m-%d %H:%M")
+
     def _line_last(label: str, task: dict[str, Any] | None) -> str:
         rt = (task or {}).get("runtime") or {}
+        details_url = str((task or {}).get("latest_crawl_url" if label == "last crawl" else "latest_link_url") or "")
+        when = _fmt_dt_short(rt.get("last_end_at"))
+        when_cell = f'<a href="{esc(details_url)}" class="mono">{esc(when)}</a>' if details_url and when != "—" else f'<span class="mono">{esc(when)}</span>'
         return (
-            f'<div class="job-line"><span class="line-label">{esc(label)}:</span> '
-            f'<span class="mono">{esc(rt.get("last_end_at") or "—")}</span> · '
-            f'<span class="mono">{esc(rt.get("last_exit_code") if rt.get("last_exit_code") is not None else "—")}</span> · '
-            f'{_status_cell(rt)}</div>'
+            f'<div class="job-line-grid"><span class="line-label">{esc(label)}:</span>'
+            f'<span class="line-date">{when_cell}</span>'
+            f'<span class="line-mid mono">{esc(rt.get("last_exit_code") if rt.get("last_exit_code") is not None else "—")}</span>'
+            f'<span class="line-status">{_status_cell(rt)}</span></div>'
         )
 
     def _line_next(label: str, task: dict[str, Any] | None) -> str:
@@ -44,19 +60,27 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
         dec = (task or {}).get("declarative") or {}
         cadence = f'{esc(dec.get("mode", ""))} · {esc(dec.get("expression", ""))}' if task else "—"
         return (
-            f'<div class="job-line"><span class="line-label">{esc(label)}:</span> '
-            f'<span class="mono">{esc(rt.get("next_run_at") or "—")}</span> · '
-            f'<span class="mono">{cadence}</span> · '
-            f'{_status_cell(rt)}</div>'
+            f'<div class="job-line-grid"><span class="line-label">{esc(label)}:</span>'
+            f'<span class="line-date mono">{esc(_fmt_dt_short(rt.get("next_run_at")))}</span>'
+            f'<span class="line-mid mono">{cadence}</span>'
+            f'<span class="line-status">{_status_cell(rt)}</span></div>'
         )
 
     def row_for(job_row: dict[str, Any]) -> str:
         job_id = str(job_row.get("job_id") or "")
+        job_name = str(job_row.get("job_name") or job_id)
+        history_url = str(job_row.get("history_url") or "")
         crawl_task = job_row.get("crawl")
         link_task = job_row.get("link_check")
+        pages_total = job_row.get("pages_total")
+        external_total = job_row.get("external_total")
+        failed_total = job_row.get("failed_total")
+        failed_ratio = job_row.get("failed_ratio")
+        history_link = f'<a href="{esc(history_url)}">(history)</a>' if history_url else ""
         return f"""<tr>
     <td>
-      <div class="job-title">{esc(job_id)}</div>
+      <div class="job-title-row"><span class="job-title">{esc(job_name)}</span><span class="job-history">{history_link}</span></div>
+      <div class="job-summary mono">pages covered: {esc(pages_total if pages_total is not None else "—")} · external links: {esc(external_total if external_total is not None else "—")} · failed links: {esc(failed_total if failed_total is not None else "—")} ({esc(failed_ratio if failed_ratio is not None else 0)}%)</div>
       {_line_last("last crawl", crawl_task)}
       {_line_next("next crawl", crawl_task)}
       {_line_last("last check", link_task)}
@@ -134,22 +158,44 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
       letter-spacing: 0.01em;
       opacity: 0.95;
     }}
+    .job-title-row {{
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 1rem;
+      margin-bottom: 0.2rem;
+    }}
     .job-title {{
       font-size: 1rem;
       font-weight: 700;
-      margin-bottom: 0.35rem;
       color: var(--cardano-blue);
     }}
-    .job-line {{
-      margin-top: 0.2rem;
+    .job-history a {{
+      font-size: 0.8rem;
+      color: var(--cardano-blue-light);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }}
+    .job-summary {{
+      margin-bottom: 0.25rem;
+      color: var(--muted);
+      font-size: 0.78rem;
+    }}
+    .job-line-grid {{
+      display: grid;
+      grid-template-columns: 7.25rem 12rem minmax(10rem, 1fr) 8rem;
+      gap: 0.75rem;
+      align-items: center;
+      margin-top: 0.18rem;
       font-size: 0.82rem;
     }}
     .line-label {{
-      display: inline-block;
-      min-width: 6.8rem;
       color: var(--muted);
       font-weight: 600;
     }}
+    .line-date {{ white-space: nowrap; }}
+    .line-mid {{ color: var(--text); }}
+    .line-status {{ white-space: nowrap; }}
     .hero h1 {{
       margin: 0 0 0.35rem;
       font-size: 1.65rem;

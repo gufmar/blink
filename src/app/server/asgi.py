@@ -270,7 +270,7 @@ async def schedule_dashboard(request: Request) -> HTMLResponse:
     payload = svc.build_schedule_payload()
     jobs_root: Path = request.app.state.jobs_root
     jobs = _load_job_entries(jobs_root)
-    jobs_summary: list[dict[str, Any]] = []
+    job_meta: dict[str, dict[str, Any]] = {}
     for job in jobs:
         job_id = str(job["job_id"])
         repo_and_conn = _open_repo_if_exists(_db_path_for_job(jobs_root, job_id))
@@ -278,27 +278,39 @@ async def schedule_dashboard(request: Request) -> HTMLResponse:
         try:
             crawl_history = _serialize_run_history(job_id, repo, limit=1)
             link_history = _serialize_link_check_history(job_id, repo, limit=1)
+            counts = repo.get_distinct_link_counts() if repo is not None else {"internal_urls_distinct": 0, "external_urls_distinct": 0}
         finally:
             _close_repo(repo_and_conn)
         latest_crawl = crawl_history[0] if crawl_history else None
         latest_link = link_history[0] if link_history else None
         crawl_history_url = _path_for(request, "dashboard_results_job_history", job_id=job_id)
-        latest_link_url = ""
-        if latest_link and latest_link.get("run_id") is not None:
-            latest_link_url = (
-                f"{_path_for(request, 'dashboard_results_run', job_id=job_id, run_id=int(latest_link['run_id']))}"
-                "?task_type=link_check"
-            )
-        jobs_summary.append(
-            {
-                **job,
-                "latest_crawl": latest_crawl,
-                "latest_link_check": latest_link,
-                "crawl_history_url": crawl_history_url,
-                "latest_link_check_url": latest_link_url,
-            }
+        latest_crawl_url = (
+            f"{_path_for(request, 'dashboard_results_run', job_id=job_id, run_id=int(latest_crawl['run_id']))}?task_type=crawl"
+            if latest_crawl and latest_crawl.get("run_id") is not None
+            else ""
         )
-    payload["jobs_summary"] = jobs_summary
+        latest_link_url = (
+            f"{_path_for(request, 'dashboard_results_run', job_id=job_id, run_id=int(latest_link['run_id']))}?task_type=link_check"
+            if latest_link and latest_link.get("run_id") is not None
+            else ""
+        )
+        external_total = int(counts.get("external_urls_distinct") or 0)
+        failed_total = int(latest_link.get("failed_total") or 0) if latest_link else 0
+        failed_ratio = int(round((failed_total / external_total) * 100.0)) if external_total > 0 else 0
+        job_meta[job_id] = {
+            "job_name": str(job.get("name") or job_id),
+            "history_url": crawl_history_url,
+            "latest_crawl_url": latest_crawl_url,
+            "latest_link_url": latest_link_url,
+            "pages_total": int(counts.get("internal_urls_distinct") or 0),
+            "external_total": external_total,
+            "failed_total": failed_total,
+            "failed_ratio": failed_ratio,
+        }
+    for task in payload.get("tasks") or []:
+        job_id = str(task.get("job_id") or "")
+        meta = job_meta.get(job_id) or {}
+        task.update(meta)
     page = render_schedule_dashboard_html(
         payload,
         links={
