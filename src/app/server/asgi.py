@@ -14,7 +14,8 @@ from urllib.parse import urlencode
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
-from starlette.routing import Route
+from starlette.routing import Mount, Route
+from starlette.staticfiles import StaticFiles
 
 from app.config.loader import load_effective_job_config, project_root
 from app.config.schema import validate_job_config
@@ -80,6 +81,43 @@ def _path_for(request: Request, route_name: str, **path_params: object) -> str:
     if config_base and root_path.startswith(config_base):
         config_base = ""
     return _join_url_paths(config_base, root_path, app_path)
+
+
+def _branding_links(request: Request) -> dict[str, str]:
+    """Resolve optional logo/favicon static links for dashboard pages."""
+    static_root = Path(__file__).resolve().parent / "static" / "branding"
+
+    def static_url(rel_path: str) -> str:
+        return _path_for(request, "static", path=rel_path)
+
+    def pick_existing(paths: list[str]) -> str:
+        for rel in paths:
+            if (static_root / rel).is_file():
+                return static_url(rel)
+        return ""
+
+    logo_url = pick_existing(
+        [
+            "logo/blink-logo.svg",
+            "logo/blink-logo.png",
+            "logo/logo.svg",
+            "logo/logo.png",
+            "logo/blink-512x512.png",
+        ]
+    )
+    if not logo_url:
+        for candidate in sorted((static_root / "logo").glob("*")):
+            if candidate.is_file() and candidate.suffix.lower() in {".png", ".svg", ".jpg", ".jpeg", ".webp"}:
+                logo_url = static_url(f"logo/{candidate.name}")
+                break
+
+    return {
+        "logo_url": logo_url,
+        "favicon_ico": pick_existing(["favicon/favicon.ico"]),
+        "favicon_svg": pick_existing(["favicon/favicon.svg"]),
+        "apple_touch_icon": pick_existing(["favicon/apple-touch-icon.png"]),
+        "manifest": pick_existing(["favicon/site.webmanifest"]),
+    }
 
 
 def _query_list(request: Request, key: str) -> list[str]:
@@ -217,6 +255,7 @@ async def schedule_dashboard(request: Request) -> HTMLResponse:
             "slack_health": _path_for(request, "slack_health"),
             "results_index": _path_for(request, "dashboard_results_jobs"),
             "schedule_refresh": _path_for(request, "dashboard_schedule"),
+            **_branding_links(request),
         },
     )
     return HTMLResponse(page)
@@ -449,6 +488,7 @@ async def dashboard_results_jobs(request: Request) -> HTMLResponse:
             "jobs_json": _path_for(request, "api_results_jobs"),
             "health": _path_for(request, "health"),
             "refresh": _path_for(request, "dashboard_results_jobs"),
+            **_branding_links(request),
         },
     )
     return HTMLResponse(page)
@@ -465,12 +505,16 @@ async def dashboard_results_job(request: Request) -> HTMLResponse:
     repo_and_conn = _open_repo_if_exists(_db_path_for_job(jobs_root, job_id))
     repo = repo_and_conn[0] if repo_and_conn else None
     try:
+        counts = repo.get_distinct_link_counts() if repo is not None else {"external_urls_distinct": 0}
+        total_external_urls = int(counts.get("external_urls_distinct") or 0)
         crawl_rows = _serialize_run_history(job_id, repo, limit=200)
         for row in crawl_rows:
             row["task_type"] = "crawl"
+            row["total_external_urls"] = total_external_urls
         link_rows = _serialize_link_check_history(job_id, repo, limit=200)
         for row in link_rows:
             row["task_type"] = "link_check"
+            row["total_external_urls"] = total_external_urls
     finally:
         _close_repo(repo_and_conn)
     run_rows = []
@@ -516,6 +560,7 @@ async def dashboard_results_job(request: Request) -> HTMLResponse:
             ),
             "show_crawl": show_crawl,
             "show_link_check": show_link_check,
+            **_branding_links(request),
         },
     )
     return HTMLResponse(page)
@@ -718,6 +763,7 @@ async def dashboard_results_run(request: Request) -> HTMLResponse:
                 include_category_q=include_category,
                 exclude_category_q=exclude_category,
             ),
+            **_branding_links(request),
         },
     )
     return HTMLResponse(page)
@@ -935,6 +981,7 @@ def build_app(
 
     app = Starlette(
         routes=[
+            Mount("/static", app=StaticFiles(directory=Path(__file__).resolve().parent / "static"), name="static"),
             Route("/health", health, methods=["GET"], name="health"),
             Route("/notifications/slack/health", health, methods=["GET"], name="slack_health"),
             Route("/api/schedule", api_schedule, methods=["GET"], name="api_schedule"),

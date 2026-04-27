@@ -54,6 +54,7 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Blink · Schedules</title>
+  {_favicon_head(links)}
   <style>
     :root {{
       --cardano-blue: #121f63;
@@ -88,6 +89,26 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
     .hero-inner {{
       max-width: 1200px;
       margin: 0 auto;
+    }}
+    .brand {{
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 0.75rem;
+    }}
+    .brand-logo {{
+      width: 36px;
+      height: 36px;
+      object-fit: contain;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.14);
+      padding: 4px;
+    }}
+    .brand-name {{
+      font-size: 0.9rem;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      opacity: 0.95;
     }}
     .hero h1 {{
       margin: 0 0 0.35rem;
@@ -249,6 +270,7 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
 <body>
   <header class="hero">
     <div class="hero-inner">
+      {_brand_header(links)}
       <h1>Blink schedules</h1>
       <p>Scheduled crawl and link-check tasks — next run, last run, and status at a glance.</p>
       <nav class="nav" aria-label="Endpoints">
@@ -364,6 +386,7 @@ def render_results_jobs_html(payload: dict[str, Any], *, links: dict[str, str]) 
         table_rows=rows if rows else empty_row,
         footer_link=links.get("refresh", ""),
         footer_label="Refresh",
+        branding_links=links,
     )
 
 
@@ -376,61 +399,94 @@ def render_results_job_html(
 ) -> str:
     """Render one job+task type run history table."""
 
+    def _fmt_dt(value: object, *, ongoing: bool = False) -> str:
+        if value is None or str(value).strip() == "":
+            return "ongoing" if ongoing else "—"
+        raw = str(value).strip()
+        normalized = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return raw
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.strftime("%Y-%m-%d %H:%M")
+
+    def _with_ratio_tooltip(value: int | None, total: int, label: str) -> str:
+        if value is None:
+            return "—"
+        if total <= 0:
+            return f'<span title="{esc(label)} ratio unavailable: total external URLs is 0">{esc(value)}</span>'
+        ratio = (float(value) / float(total)) * 100.0
+        tooltip = f"{label} ratio: {value}/{total} = {ratio:.2f}%"
+        return f'<span title="{esc(tooltip)}">{esc(value)}</span>'
+
     def row_for(run: dict[str, Any]) -> str:
-        started = esc(run.get("started_at") or "—")
+        started = esc(_fmt_dt(run.get("started_at")))
         row_task_type = str(run.get("task_type") or task_type)
         finished_val = run.get("finished_at")
-        finished = esc(finished_val if finished_val else "ongoing")
+        finished = esc(_fmt_dt(finished_val, ongoing=True))
+        total_external_urls = int(run.get("total_external_urls") or 0)
+        run_id = run.get("run_id", "")
         if task_type == "all":
             if row_task_type == "link_check":
+                based_on = run.get("based_on_crawl_run_id")
+                run_id_cell = (
+                    f'<span title="{esc(f"this link-check is pased on crawl run {based_on}")}">{esc(run_id)}</span>'
+                    if based_on is not None
+                    else esc(run_id)
+                )
                 return f"""<tr>
     <td class="mono"><a href="{esc(run.get("details_url", ""))}">{started}</a></td>
     <td>{esc(row_task_type)}</td>
     <td class="mono">{finished}</td>
-    <td class="mono">{esc(run.get("run_id", ""))}</td>
-    <td class="mono">{esc(run.get("based_on_crawl_run_id") if run.get("based_on_crawl_run_id") is not None else "—")}</td>
+    <td class="mono">{run_id_cell}</td>
     <td class="mono">{esc(run.get("checked_total") if run.get("checked_total") is not None else "—")}</td>
-    <td class="mono">{esc(run.get("failed_total") if run.get("failed_total") is not None else "—")}</td>
-    <td class="mono">{esc(run.get("ignored_total") if run.get("ignored_total") is not None else "—")}</td>
+    <td class="mono">{_with_ratio_tooltip(run.get("ignored_total"), total_external_urls, "ignored")}</td>
+    <td class="mono">{_with_ratio_tooltip(run.get("failed_total"), total_external_urls, "failed")}</td>
   </tr>"""
             return f"""<tr>
     <td class="mono"><a href="{esc(run.get("details_url", ""))}">{started}</a></td>
     <td>{esc(row_task_type)}</td>
     <td class="mono">{finished}</td>
-    <td class="mono">{esc(run.get("run_id", ""))}</td>
-    <td class="mono">—</td>
+    <td class="mono">{esc(run_id)}</td>
     <td class="mono">{esc(run.get("pages_visited") if run.get("pages_visited") is not None else "—")}</td>
-    <td class="mono">{esc(run.get("pages_failed") if run.get("pages_failed") is not None else "—")}</td>
     <td class="mono">—</td>
+    <td class="mono">{esc(run.get("pages_failed") if run.get("pages_failed") is not None else "—")}</td>
   </tr>"""
         if task_type == "link_check":
+            based_on = run.get("based_on_crawl_run_id")
+            run_id_cell = (
+                f'<span title="{esc(f"this link-check is pased on crawl run {based_on}")}">{esc(run_id)}</span>'
+                if based_on is not None
+                else esc(run_id)
+            )
             return f"""<tr>
     <td class="mono"><a href="{esc(run.get("details_url", ""))}">{started}</a></td>
     <td class="mono">{finished}</td>
-    <td class="mono">{esc(run.get("run_id", ""))}</td>
-    <td class="mono">{esc(run.get("based_on_crawl_run_id") if run.get("based_on_crawl_run_id") is not None else "—")}</td>
+    <td class="mono">{run_id_cell}</td>
     <td class="mono">{esc(run.get("checked_total") if run.get("checked_total") is not None else "—")}</td>
-    <td class="mono">{esc(run.get("failed_total") if run.get("failed_total") is not None else "—")}</td>
-    <td class="mono">{esc(run.get("ignored_total") if run.get("ignored_total") is not None else "—")}</td>
+    <td class="mono">{_with_ratio_tooltip(run.get("ignored_total"), total_external_urls, "ignored")}</td>
+    <td class="mono">{_with_ratio_tooltip(run.get("failed_total"), total_external_urls, "failed")}</td>
   </tr>"""
         return f"""<tr>
     <td class="mono"><a href="{esc(run.get("details_url", ""))}">{started}</a></td>
-    <td class="mono">{esc(run.get("run_id", ""))}</td>
+    <td class="mono">{esc(run_id)}</td>
     <td class="mono">{finished}</td>
     <td class="mono">{esc(run.get("pages_visited"))}</td>
+    <td class="mono">—</td>
     <td class="mono">{esc(run.get("pages_failed"))}</td>
-    <td class="mono">{esc(run.get("links_discovered"))}</td>
   </tr>"""
 
     rows = "\n".join(row_for(run) for run in run_rows) if run_rows else ""
-    empty_colspan = "8" if task_type == "all" else ("7" if task_type == "link_check" else "6")
+    empty_colspan = "7" if task_type in {"all", "link_check"} else "6"
     empty_row = f'<tr><td colspan="{empty_colspan}" class="empty">No runs available for this task yet.</td></tr>'
     if task_type == "link_check":
-        table_headers = ["Checked at", "Finished", "Link-check run id", "Based on crawl run id", "Checked", "Failed", "Ignored"]
+        table_headers = ["Checked at", "Finished", "Link-check run id", "Visited/Checked", "Ignored", "Failed"]
     elif task_type == "all":
-        table_headers = ["Started", "Task type", "Finished", "Run id", "Based on crawl run id", "Visited/Checked", "Failed", "Ignored"]
+        table_headers = ["Started", "Task type", "Finished", "Run id", "Visited/Checked", "Ignored", "Failed"]
     else:
-        table_headers = ["Started", "Run id", "Finished", "Pages visited", "Pages failed", "Links discovered"]
+        table_headers = ["Started", "Run id", "Finished", "Visited/Checked", "Ignored", "Failed"]
     toggle_row = ""
     if task_type == "all":
         show_crawl = bool(links.get("show_crawl"))
@@ -461,6 +517,7 @@ def render_results_job_html(
         footer_link=links.get("refresh", ""),
         footer_label="Refresh",
         body_extra=toggle_row,
+        branding_links=links,
     )
 
 
@@ -669,6 +726,7 @@ def render_results_run_html(
         footer_label="Refresh",
         body_extra=body_extra,
         show_table_header=False,
+        branding_links=links,
     )
 
 
@@ -685,7 +743,9 @@ def _render_results_shell(
     footer_label: str,
     body_extra: str = "",
     show_table_header: bool = True,
+    branding_links: dict[str, str] | None = None,
 ) -> str:
+    branding_links = branding_links or {}
     nav_html = "\n".join(f'<a href="{esc(href)}">{esc(label)}</a>' for label, href in nav_links if href)
     headers_html = "".join(f"<th>{esc(h)}</th>" for h in table_headers)
     gen_at = datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
@@ -695,11 +755,13 @@ def _render_results_shell(
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>{esc(title)}</title>
+  {_favicon_head(branding_links)}
   {_shared_styles()}
 </head>
 <body>
   <header class="hero">
     <div class="hero-inner">
+      {_brand_header(branding_links)}
       <h1>{esc(heading)}</h1>
       <p>{esc(subtitle)}</p>
       <nav class="nav" aria-label="Endpoints">
@@ -745,6 +807,9 @@ def _shared_styles() -> str:
   body { margin: 0; font-family: var(--font); background: var(--surface); color: var(--text); line-height: 1.5; min-height: 100vh; }
   .hero { background: linear-gradient(135deg, var(--cardano-blue) 0%, var(--cardano-blue-light) 100%); color: #fff; padding: 2rem 1.5rem 2.25rem; box-shadow: var(--shadow); }
   .hero-inner { max-width: 1200px; margin: 0 auto; }
+  .brand { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; }
+  .brand-logo { width: 36px; height: 36px; object-fit: contain; border-radius: 8px; background: rgba(255, 255, 255, 0.14); padding: 4px; }
+  .brand-name { font-size: 0.9rem; font-weight: 600; letter-spacing: 0.01em; opacity: 0.95; }
   .hero h1 { margin: 0 0 0.35rem; font-size: 1.65rem; font-weight: 700; letter-spacing: -0.02em; }
   .hero p { margin: 0; opacity: 0.92; font-size: 0.95rem; max-width: 42rem; }
   .nav { margin-top: 1rem; display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; font-size: 0.875rem; }
@@ -779,6 +844,33 @@ def _shared_styles() -> str:
 
 def esc(s: object) -> str:
     return html.escape("" if s is None else str(s))
+
+
+def _favicon_head(links: dict[str, str]) -> str:
+    bits: list[str] = []
+    if links.get("favicon_ico"):
+        bits.append(f'<link rel="icon" href="{esc(links["favicon_ico"])}" sizes="any"/>')
+    if links.get("favicon_svg"):
+        bits.append(f'<link rel="icon" href="{esc(links["favicon_svg"])}" type="image/svg+xml"/>')
+    if links.get("apple_touch_icon"):
+        bits.append(f'<link rel="apple-touch-icon" href="{esc(links["apple_touch_icon"])}"/>')
+    if links.get("manifest"):
+        bits.append(f'<link rel="manifest" href="{esc(links["manifest"])}"/>')
+    return "\n  ".join(bits)
+
+
+def _brand_header(links: dict[str, str]) -> str:
+    logo_url = str(links.get("logo_url") or "").strip()
+    if not logo_url:
+        return ""
+    return (
+        '<div class="brand" aria-label="Branding">'
+        f'<img src="{esc(logo_url)}" alt="Blink logo" class="brand-logo"/>'
+        '<span class="brand-name">Blink</span>'
+        "</div>"
+    )
+
+
 
 
 def _render_link_list(urls: list[str]) -> str:
