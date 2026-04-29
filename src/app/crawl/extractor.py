@@ -54,10 +54,10 @@ def extract_hrefs(html: str) -> list[tuple[str, str]]:
     return parser.anchors
 
 
-def normalize_url(url: str, parse_querystring: bool, parse_fragments: bool) -> str:
+def normalize_url(url: str, keep_query: bool, keep_fragment: bool) -> str:
     parts = urlsplit(url)
-    query = parts.query if parse_querystring else ""
-    fragment = parts.fragment if parse_fragments else ""
+    query = parts.query if keep_query else ""
+    fragment = parts.fragment if keep_fragment else ""
     return urlunsplit((parts.scheme, parts.netloc, parts.path or "/", query, fragment))
 
 
@@ -117,22 +117,28 @@ def extract_links(source_url: str, html: str, config: JobConfig) -> ExtractLinks
     seen_index: dict[str, int] = {}
     for href, anchor_text in extract_hrefs(html):
         absolute = urljoin(source_url, href)
-        normalized = normalize_url(
-            absolute,
-            parse_querystring=config["crawl"]["parse_querystring"],
-            parse_fragments=config["crawl"]["parse_fragments"],
-        )
-        reason = ignore_reason(normalized, config)
+        is_internal = is_internal_url(absolute, config)
+        if is_internal:
+            selected_url = normalize_url(
+                absolute,
+                keep_query=config["crawl"]["url_normalization"]["internal"]["keep_query"],
+                keep_fragment=config["crawl"]["url_normalization"]["internal"]["keep_fragment"],
+            )
+        elif config["crawl"]["url_normalization"]["external"]["store_raw_href"]:
+            selected_url = absolute
+        else:
+            selected_url = normalize_url(absolute, keep_query=True, keep_fragment=True)
+        reason = ignore_reason(selected_url, config)
         if reason:
-            if is_internal_url(normalized, config):
+            if is_internal:
                 skipped[reason] += 1
             continue
-        if normalized in seen_index:
-            idx = seen_index[normalized]
+        if selected_url in seen_index:
+            idx = seen_index[selected_url]
             existing_url, existing_internal, existing_text = links[idx]
             if not existing_text and anchor_text:
                 links[idx] = (existing_url, existing_internal, anchor_text)
             continue
-        seen_index[normalized] = len(links)
-        links.append((normalized, is_internal_url(normalized, config), anchor_text))
+        seen_index[selected_url] = len(links)
+        links.append((selected_url, is_internal, anchor_text))
     return ExtractLinksResult(links=links, internal_skipped_by_reason=skipped)

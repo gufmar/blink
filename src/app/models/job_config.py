@@ -50,14 +50,27 @@ class CrawlObservabilityConfig(TypedDict):
     save_failure_html: bool
 
 
+class CrawlInternalUrlNormalizationConfig(TypedDict):
+    keep_query: bool
+    keep_fragment: bool
+
+
+class CrawlExternalUrlStorageConfig(TypedDict):
+    store_raw_href: bool
+
+
+class CrawlUrlNormalizationConfig(TypedDict):
+    internal: CrawlInternalUrlNormalizationConfig
+    external: CrawlExternalUrlStorageConfig
+
+
 class CrawlConfig(TypedDict):
     render_mode: Literal["playwright"]
     user_agent: str
     request_delay_seconds: float
     max_pages_per_run: int
     max_depth: int | None
-    parse_querystring: bool
-    parse_fragments: bool
+    url_normalization: CrawlUrlNormalizationConfig
     timeouts: CrawlTimeoutsConfig
     retry_count: int
     max_response_bytes: int
@@ -76,11 +89,27 @@ class UrlIgnoreConfig(TypedDict):
 
 
 class LinkCheckIgnoreConfig(TypedDict):
+    url_schemes: list[str]
     http_status: list[int]
     error_category: list[Literal["client", "server", "timeout", "connection", "other"]]
     error_message_contains: list[str]
     target_netloc_contains: list[str]
     target_domain_equals: list[str]
+
+
+class LinkCheckTargetRequestPolicyConfig(TypedDict):
+    keep_query: bool
+    keep_fragment: bool
+
+
+class LinkCheckTargetReportingPolicyConfig(TypedDict):
+    show_fragment: bool
+
+
+class LinkCheckTargetUrlPolicyConfig(TypedDict):
+    source: Literal["external_raw"]
+    request: LinkCheckTargetRequestPolicyConfig
+    reporting: LinkCheckTargetReportingPolicyConfig
 
 
 class ContentConfig(TypedDict):
@@ -98,6 +127,7 @@ class LinkCheckConfig(TypedDict):
     retry_count: int
     consecutive_failures_before_alert: int
     ignore: LinkCheckIgnoreConfig
+    target_url_policy: LinkCheckTargetUrlPolicyConfig
     follow_redirects: bool
     write_json_report: bool
     save_failure_screenshot: bool

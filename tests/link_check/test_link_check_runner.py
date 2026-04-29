@@ -156,6 +156,7 @@ def test_run_link_check_ignores_configured_http_status(tmp_path: Path) -> None:
     config["meta"]["job_id"] = "cardano.org"
     config["link_check"]["enabled"] = True
     config["link_check"]["retry_count"] = 0
+    config["link_check"]["ignore"]["url_schemes"] = []
     config["link_check"]["ignore"]["http_status"] = [403]
 
     checker = FakeChecker(
@@ -192,6 +193,98 @@ def test_run_link_check_ignores_configured_http_status(tmp_path: Path) -> None:
     connection.close()
 
 
+def test_run_link_check_ignores_configured_url_scheme(tmp_path: Path) -> None:
+    connection = connect_sqlite(tmp_path / "crawl_scheme_ignore.db")
+    initialize_schema(connection)
+    repo = CrawlRepository(connection)
+    run_id = repo.create_run("cardano.org")
+    repo.add_page_result(run_id, "https://cardano.org", 0, 200, True)
+    repo.add_link(run_id=run_id, source_url="https://cardano.org", target_url="mailto:grafana@yourdomain.com", is_internal=False)
+
+    config = load_effective_job_config("jobs/cardano.org.job.json", cwd=Path.cwd())
+    config["meta"]["job_id"] = "cardano.org"
+    config["link_check"]["enabled"] = True
+    config["link_check"]["retry_count"] = 0
+    config["link_check"]["ignore"]["url_schemes"] = ["mailto"]
+
+    checker = FakeChecker(
+        {
+            "mailto:grafana@yourdomain.com": [
+                HttpCheckResult(status_code=None, ok=False, error_message="Unsupported scheme"),
+            ],
+        }
+    )
+
+    summary = run_link_check(
+        config=config,
+        repository=repo,
+        checker=checker,
+        run_id=run_id,
+    )
+    assert summary.checked == 1
+    assert summary.ignored == 1
+    assert summary.reportable_failures == 0
+    stored = connection.execute(
+        """
+        SELECT decision_state, decision_reason
+        FROM link_check_results
+        WHERE target_url = 'mailto:grafana@yourdomain.com'
+        """
+    ).fetchone()
+    assert stored is not None
+    assert stored["decision_state"] == "ignored"
+    assert stored["decision_reason"] == "link_check.ignore.url_schemes:mailto"
+    connection.close()
+
+
+def test_run_link_check_applies_request_target_url_policy(tmp_path: Path) -> None:
+    connection = connect_sqlite(tmp_path / "crawl_target_policy.db")
+    initialize_schema(connection)
+    repo = CrawlRepository(connection)
+    run_id = repo.create_run("cardano.org")
+    repo.add_page_result(run_id, "https://cardano.org", 0, 200, True)
+    repo.add_link(
+        run_id=run_id,
+        source_url="https://cardano.org",
+        target_url="https://service.example/path?token=abc#section",
+        is_internal=False,
+    )
+
+    config = load_effective_job_config("jobs/cardano.org.job.json", cwd=Path.cwd())
+    config["meta"]["job_id"] = "cardano.org"
+    config["link_check"]["enabled"] = True
+    config["link_check"]["retry_count"] = 0
+    config["link_check"]["target_url_policy"]["request"]["keep_query"] = False
+    config["link_check"]["target_url_policy"]["request"]["keep_fragment"] = False
+
+    checker = FakeChecker(
+        {
+            "https://service.example/path": [
+                HttpCheckResult(status_code=200, ok=True, error_message=None),
+            ],
+        }
+    )
+
+    summary = run_link_check(
+        config=config,
+        repository=repo,
+        checker=checker,
+        run_id=run_id,
+    )
+    assert summary.checked == 1
+    assert summary.passed == 1
+    stored = connection.execute(
+        """
+        SELECT target_url, ok
+        FROM link_check_results
+        WHERE target_url = 'https://service.example/path?token=abc#section'
+        """
+    ).fetchone()
+    assert stored is not None
+    assert int(stored["ok"]) == 1
+    connection.close()
+
+
 def test_run_link_check_ignores_by_error_message_and_domain(tmp_path: Path) -> None:
     connection = connect_sqlite(tmp_path / "crawl_rule_ignore.db")
     initialize_schema(connection)
@@ -205,6 +298,7 @@ def test_run_link_check_ignores_by_error_message_and_domain(tmp_path: Path) -> N
     config["meta"]["job_id"] = "cardano.org"
     config["link_check"]["enabled"] = True
     config["link_check"]["retry_count"] = 0
+    config["link_check"]["ignore"]["url_schemes"] = []
     config["link_check"]["ignore"]["http_status"] = []
     config["link_check"]["ignore"]["target_domain_equals"] = ["shielded.example"]
     config["link_check"]["ignore"]["error_message_contains"] = ["certificate"]

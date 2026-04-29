@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Callable, Protocol
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from app.link_check.http_client import HttpCheckResult
 from app.link_check.reporting import classify_error_category
@@ -63,6 +63,12 @@ def _match_link_check_ignore(
     error_category: str | None,
     ignore_config: LinkCheckIgnoreConfig,
 ) -> str | None:
+    scheme = urlsplit(target_url).scheme.lower()
+    for ignored_scheme in ignore_config["url_schemes"]:
+        token = str(ignored_scheme).strip().lower()
+        if token and scheme == token:
+            return f"link_check.ignore.url_schemes:{token}"
+
     ignored_http_statuses = {int(code) for code in ignore_config["http_status"]}
     if status_code is not None and status_code in ignored_http_statuses:
         return f"link_check.ignore.http_status:{status_code}"
@@ -89,6 +95,14 @@ def _match_link_check_ignore(
             return f"link_check.ignore.target_domain_equals:{token}"
 
     return None
+
+
+def _build_request_target_url(raw_target_url: str, config: JobConfig) -> str:
+    policy = config["link_check"]["target_url_policy"]["request"]
+    parsed = urlsplit(raw_target_url)
+    query = parsed.query if policy["keep_query"] else ""
+    fragment = parsed.fragment if policy["keep_fragment"] else ""
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, query, fragment))
 
 
 def run_link_check(
@@ -151,12 +165,13 @@ def run_link_check(
 
     total_links = len(links)
     for index, link in enumerate(links, start=1):
+        request_target_url = _build_request_target_url(link.target_url, config)
         if status_hook:
             progress_pct = int(((index - 1) / total_links) * 100) if total_links > 0 else 100
             status_hook(f"Checking progress={progress_pct}% ({index}/{total_links}): {link.target_url}")
         final_result: HttpCheckResult | None = None
         for _ in range(retries + 1):
-            attempt_result = checker.check(link.target_url)
+            attempt_result = checker.check(request_target_url)
             final_result = attempt_result
             if attempt_result.ok:
                 break
@@ -183,7 +198,7 @@ def run_link_check(
             else:
                 failed += 1
             ignore_decision_reason = _match_link_check_ignore(
-                target_url=link.target_url,
+                target_url=request_target_url,
                 status_code=final_result.status_code,
                 error_message=final_result.error_message,
                 error_category=error_category,

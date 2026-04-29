@@ -21,8 +21,15 @@
     "request_delay_seconds": 1.0,
     "max_pages_per_run": 0,
     "max_depth": null,
-    "parse_querystring": false,
-    "parse_fragments": true,
+    "url_normalization": {
+      "internal": {
+        "keep_query": false,
+        "keep_fragment": true
+      },
+      "external": {
+        "store_raw_href": true
+      }
+    },
     "timeouts": {
       "navigation_seconds": 20,
       "network_idle_seconds": 4,
@@ -100,6 +107,12 @@
     "retry_count": 1,
     "consecutive_failures_before_alert": 2,
     "ignore": {
+      "url_schemes": [
+        "mailto",
+        "tel",
+        "javascript",
+        "ftp"
+      ],
       "http_status": [
         400,
         403,
@@ -110,6 +123,16 @@
       "error_message_contains": [],
       "target_netloc_contains": [],
       "target_domain_equals": []
+    },
+    "target_url_policy": {
+      "source": "external_raw",
+      "request": {
+        "keep_query": true,
+        "keep_fragment": true
+      },
+      "reporting": {
+        "show_fragment": true
+      }
     },
     "follow_redirects": true,
     "write_json_report": true,

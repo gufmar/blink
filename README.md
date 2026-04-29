@@ -87,7 +87,12 @@ On each crawl or link-check run, missing `db/`, `logs/`, or `artifacts/` folders
 
 After a crawl, the console and log include **internal links skipped by crawl.ignore.*** counts per config section (URL-based rules only).
 
-`link_check.ignore.http_status` now controls which external-link HTTP status codes are ignored during link-check execution.
+URL behavior is split by concern:
+
+- `crawl.url_normalization.internal.keep_query|keep_fragment` controls internal URL normalization for crawl frontier discovery.
+- `crawl.url_normalization.external.store_raw_href` preserves exact external hrefs for persistence/reporting.
+- `link_check.target_url_policy.request.keep_query|keep_fragment` controls the URL form used for outbound link-check requests.
+- `link_check.ignore.http_status` controls ignored HTTP status codes, and `link_check.ignore.url_schemes` controls ignored URL schemes (for example `mailto`) during link-check execution.
 
 Run crawl using default per-job DB path:
 

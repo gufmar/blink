@@ -68,8 +68,7 @@
         "request_delay_seconds",
         "max_pages_per_run",
         "max_depth",
-        "parse_querystring",
-        "parse_fragments",
+        "url_normalization",
         "timeouts",
         "retry_count",
         "max_response_bytes",
@@ -94,8 +93,7 @@
             { "type": "null" }
           ]
         },
-        "parse_querystring": { "type": "boolean" },
-        "parse_fragments": { "type": "boolean" },
+        "url_normalization": { "$ref": "#/$defs/crawlUrlNormalization" },
         "timeouts": {
           "type": "object",
           "additionalProperties": false,
@@ -212,6 +210,7 @@
         "retry_count",
         "consecutive_failures_before_alert",
         "ignore",
+        "target_url_policy",
         "follow_redirects",
         "write_json_report",
         "save_failure_screenshot",
@@ -226,6 +225,7 @@
           "minimum": 1
         },
         "ignore": { "$ref": "#/$defs/linkCheckIgnore" },
+        "target_url_policy": { "$ref": "#/$defs/linkCheckTargetUrlPolicy" },
         "follow_redirects": { "type": "boolean" },
         "write_json_report": { "type": "boolean", "default": false },
         "save_failure_screenshot": { "type": "boolean", "default": true },
@@ -360,10 +360,35 @@
         }
       }
     },
+    "crawlUrlNormalization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["internal", "external"],
+      "properties": {
+        "internal": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["keep_query", "keep_fragment"],
+          "properties": {
+            "keep_query": { "type": "boolean" },
+            "keep_fragment": { "type": "boolean" }
+          }
+        },
+        "external": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["store_raw_href"],
+          "properties": {
+            "store_raw_href": { "type": "boolean" }
+          }
+        }
+      }
+    },
     "linkCheckIgnore": {
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "url_schemes",
         "http_status",
         "error_category",
         "error_message_contains",
@@ -371,6 +396,11 @@
         "target_domain_equals"
       ],
       "properties": {
+        "url_schemes": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": []
+        },
         "http_status": {
           "type": "array",
           "items": { "type": "integer", "minimum": 100, "maximum": 999 },
@@ -398,6 +428,34 @@
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
           "default": []
+        }
+      }
+    },
+    "linkCheckTargetUrlPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "request", "reporting"],
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": ["external_raw"]
+        },
+        "request": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["keep_query", "keep_fragment"],
+          "properties": {
+            "keep_query": { "type": "boolean" },
+            "keep_fragment": { "type": "boolean" }
+          }
+        },
+        "reporting": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["show_fragment"],
+          "properties": {
+            "show_fragment": { "type": "boolean" }
+          }
         }
       }
     },

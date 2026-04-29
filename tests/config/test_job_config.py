@@ -30,6 +30,14 @@ def test_sample_job_validates() -> None:
     assert issues == []
 
 
+def test_effective_config_uses_split_url_policies() -> None:
+    config = load_effective_job_config("jobs/cardano.org.job.json", cwd=Path.cwd())
+    assert config["crawl"]["url_normalization"]["internal"]["keep_query"] is False
+    assert config["crawl"]["url_normalization"]["external"]["store_raw_href"] is True
+    assert config["link_check"]["target_url_policy"]["source"] == "external_raw"
+    assert config["link_check"]["target_url_policy"]["request"]["keep_query"] is True
+
+
 def test_invalid_property_fails_validation(tmp_path: Path) -> None:
     job_data = json.loads(Path("jobs/cardano.org.job.json").read_text(encoding="utf-8"))
     job_data["meta"]["unexpected"] = "boom"

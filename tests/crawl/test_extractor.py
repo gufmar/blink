@@ -38,3 +38,22 @@ def test_extract_links_keeps_external_anchor_text() -> None:
     assert url == "https://ext.example/a"
     assert is_internal is False
     assert anchor_text == "this is the ext URL"
+
+
+def test_extract_links_uses_internal_normalization_and_preserves_external_query() -> None:
+    config = load_effective_job_config("jobs/cardano.org.job.json", cwd=Path.cwd())
+    config["target"]["base_url"] = "https://cardano.org"
+    config["target"]["allowed_domains"] = ["cardano.org"]
+    config["crawl"]["url_normalization"]["internal"]["keep_query"] = False
+    config["crawl"]["url_normalization"]["internal"]["keep_fragment"] = False
+    config["crawl"]["url_normalization"]["external"]["store_raw_href"] = True
+    html = """
+    <html><body>
+    <a href="/docs?page=1#toc">internal</a>
+    <a href="https://ext.example/a?item=123#frag">external</a>
+    </body></html>
+    """
+    result = extract_links("https://cardano.org/demo", html, config)
+    extracted = {(url, is_internal) for url, is_internal, _anchor in result.links}
+    assert ("https://cardano.org/docs", True) in extracted
+    assert ("https://ext.example/a?item=123#frag", False) in extracted
