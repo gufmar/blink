@@ -46,7 +46,7 @@ def _parse_iso_utc(value: str | None) -> datetime | None:
 
 
 def _has_finished_crawl_run(jobs_root: Path, job_id: str) -> bool:
-    db_path = jobs_root / job_id / "db" / f"{job_id}.sqlite3"
+    db_path = jobs_root / "data" / job_id / "db" / f"{job_id}.sqlite3"
     if not db_path.exists():
         return False
     try:

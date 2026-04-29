@@ -706,7 +706,7 @@ def purge(
     link_retest_queue. Stale link_alerts.last_reported_run_id values are NULLed.
 
     On-disk PNG artifacts referenced by deleted link_check_screenshots rows
-    are also removed from jobs/<job_id>/artifacts/.
+    are also removed from jobs/data/<job_id>/artifacts/.
     """
     if task_type not in _PURGE_TASK_TYPES:
         typer.secho(

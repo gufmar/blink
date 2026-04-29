@@ -197,7 +197,7 @@ def _load_job_entries(jobs_root: Path) -> list[dict[str, Any]]:
 
 
 def _db_path_for_job(jobs_root: Path, job_id: str) -> Path:
-    return jobs_root / job_id / "db" / f"{job_id}.sqlite3"
+    return jobs_root / "data" / job_id / "db" / f"{job_id}.sqlite3"
 
 
 def _open_repo_if_exists(db_path: Path) -> tuple[CrawlRepository, sqlite3.Connection] | None:

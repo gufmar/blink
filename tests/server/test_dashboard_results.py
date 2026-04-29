@@ -23,7 +23,7 @@ def _setup_job_with_data(tmp_path: Path, job_id: str = "zzz") -> tuple[Path, int
     data["notifications"]["enabled"] = False
     job_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
-    db_path = tmp_path / job_id / "db" / f"{job_id}.sqlite3"
+    db_path = tmp_path / "data" / job_id / "db" / f"{job_id}.sqlite3"
     conn = connect_sqlite(db_path)
     initialize_schema(conn)
     repo = CrawlRepository(conn)

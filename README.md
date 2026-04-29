@@ -79,9 +79,9 @@ blink link-check show --job jobs/cardano.org.job.json --run-id 2 --only-failed
 
 Default runtime paths are now per job id:
 
-- DB: `jobs/<job_id>/db/<job_id>.sqlite3`
-- Logs: `jobs/<job_id>/logs/<yyyy-mm-dd>.log`
-- Artifacts: `jobs/<job_id>/artifacts/`
+- DB: `jobs/data/<job_id>/db/<job_id>.sqlite3`
+- Logs: `jobs/data/<job_id>/logs/<yyyy-mm-dd>.log`
+- Artifacts: `jobs/data/<job_id>/artifacts/`
 
 On each crawl or link-check run, missing `db/`, `logs/`, or `artifacts/` folders are created. If the SQLite file is missing (e.g. renamed away), a new empty database with the current schema is created at the canonical path.
 
@@ -195,7 +195,7 @@ What gets deleted:
 
 - `crawl` purge cascades through `crawl_pages`, `crawl_links`, `run_pages`, `run_external_links`, `run_page_external_links`, the `run_*_appeared/disappeared` diff tables, every `link_check_runs` row built on top of the deleted crawl run, and their `link_check_results`/`link_check_screenshots` rows.
 - `link-check` purge cascades only through that link-check run's `link_check_results` and `link_check_screenshots`. The parent crawl run is left untouched.
-- On-disk PNGs referenced by deleted `link_check_screenshots` rows are removed from `jobs/<job_id>/artifacts/`.
+- On-disk PNGs referenced by deleted `link_check_screenshots` rows are removed from `jobs/data/<job_id>/artifacts/`.
 
 What survives a purge (job-level state, not bound to runs):
 
@@ -274,7 +274,7 @@ blink jobs pages-content-metrics --job jobs/cardano.org.job.json --only-signific
 
 When `link_check.write_json_report` is enabled, each `blink link-check run` writes one JSON report:
 
-- path: `jobs/<job_id>/reports/`
+- path: `jobs/data/<job_id>/reports/`
 - filename: `report_<job_id>_yyyy-mm-dd_hh-mm.json`
 
 Enable in job config:

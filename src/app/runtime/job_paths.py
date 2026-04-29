@@ -24,7 +24,7 @@ def build_job_paths(job_id: str, root_dir: Path | None = None, on_date: date | N
     """Return canonical runtime paths for one job id."""
     root = root_dir or project_root()
     day = on_date or date.today()
-    job_root = root / "jobs" / job_id
+    job_root = root / "jobs" / "data" / job_id
     db_dir = job_root / "db"
     logs_dir = job_root / "logs"
     artifacts_dir = job_root / "artifacts"
