@@ -670,7 +670,8 @@ def render_results_structure_html(
         '<label>External links'
         '<select id="externalMode">'
         f'<option value="none"{" selected" if selected_external_mode == "none" else ""}>none</option>'
-        f'<option value="failed_ignored"{" selected" if selected_external_mode == "failed_ignored" else ""}>failed + ignored</option>'
+        f'<option value="failed"{" selected" if selected_external_mode == "failed" else ""}>failed only</option>'
+        f'<option value="ignored"{" selected" if selected_external_mode == "ignored" else ""}>ignored only</option>'
         "</select>"
         "</label>"
     )

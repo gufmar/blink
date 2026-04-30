@@ -344,7 +344,7 @@ def _build_structure_tree_payload(
         leaf["ok"] = bool(getattr(row, "ok", False))
         leaf_count += 1
 
-        if external_mode == "failed_ignored":
+        if external_mode in {"failed", "ignored"}:
             ext_rows = list(external_links_by_source.get(page_url) or [])
             by_domain: dict[str, list[dict[str, Any]]] = {}
             for ext in ext_rows:
@@ -794,7 +794,7 @@ async def api_results_run_structure(request: Request) -> JSONResponse:
     if task_type not in {"crawl", "link_check"}:
         task_type = "crawl"
     external_mode = str(request.query_params.get("external_mode") or "none").strip().lower()
-    if external_mode not in {"none", "failed_ignored"}:
+    if external_mode not in {"none", "failed", "ignored"}:
         external_mode = "none"
     link_check_run_id_raw = str(request.query_params.get("link_check_run_id") or "").strip()
     link_check_run_id_query = int(link_check_run_id_raw) if link_check_run_id_raw.isdigit() else None
@@ -836,17 +836,21 @@ async def api_results_run_structure(request: Request) -> JSONResponse:
             for ref in records:
                 ignored_counts_by_url[ref.source_page_url] = ignored_counts_by_url.get(ref.source_page_url, 0) + 1
         external_links_by_source: dict[str, list[dict[str, Any]]] = {}
-        if external_mode == "failed_ignored":
+        if external_mode in {"failed", "ignored"}:
+            include_failed = external_mode == "failed"
+            include_ignored = external_mode == "ignored"
             for target_url, records in failed_refs.items():
-                for ref in records:
-                    external_links_by_source.setdefault(ref.source_page_url, []).append(
-                        {"target_url": target_url, "failed": True, "ignored": False}
-                    )
+                if include_failed:
+                    for ref in records:
+                        external_links_by_source.setdefault(ref.source_page_url, []).append(
+                            {"target_url": target_url, "failed": True, "ignored": False}
+                        )
             for target_url, records in ignored_refs.items():
-                for ref in records:
-                    external_links_by_source.setdefault(ref.source_page_url, []).append(
-                        {"target_url": target_url, "failed": False, "ignored": True}
-                    )
+                if include_ignored:
+                    for ref in records:
+                        external_links_by_source.setdefault(ref.source_page_url, []).append(
+                            {"target_url": target_url, "failed": False, "ignored": True}
+                        )
         details_url = (
             f"{_path_for(request, 'dashboard_results_run', job_id=job_id, run_id=selected_crawl_run_id)}"
             "?task_type=crawl"
@@ -1200,7 +1204,7 @@ async def dashboard_results_structure(request: Request) -> HTMLResponse:
     if task_type not in {"crawl", "link_check"}:
         task_type = "crawl"
     external_mode = str(request.query_params.get("external_mode") or "none").strip().lower()
-    if external_mode not in {"none", "failed_ignored"}:
+    if external_mode not in {"none", "failed", "ignored"}:
         external_mode = "none"
     link_check_run_id_raw = str(request.query_params.get("link_check_run_id") or "").strip()
     link_check_run_id_query = int(link_check_run_id_raw) if link_check_run_id_raw.isdigit() else None
@@ -1245,17 +1249,21 @@ async def dashboard_results_structure(request: Request) -> HTMLResponse:
             for ref in records:
                 ignored_counts_by_url[ref.source_page_url] = ignored_counts_by_url.get(ref.source_page_url, 0) + 1
         external_links_by_source: dict[str, list[dict[str, Any]]] = {}
-        if external_mode == "failed_ignored":
+        if external_mode in {"failed", "ignored"}:
+            include_failed = external_mode == "failed"
+            include_ignored = external_mode == "ignored"
             for target_url, records in failed_refs.items():
-                for ref in records:
-                    external_links_by_source.setdefault(ref.source_page_url, []).append(
-                        {"target_url": target_url, "failed": True, "ignored": False}
-                    )
+                if include_failed:
+                    for ref in records:
+                        external_links_by_source.setdefault(ref.source_page_url, []).append(
+                            {"target_url": target_url, "failed": True, "ignored": False}
+                        )
             for target_url, records in ignored_refs.items():
-                for ref in records:
-                    external_links_by_source.setdefault(ref.source_page_url, []).append(
-                        {"target_url": target_url, "failed": False, "ignored": True}
-                    )
+                if include_ignored:
+                    for ref in records:
+                        external_links_by_source.setdefault(ref.source_page_url, []).append(
+                            {"target_url": target_url, "failed": False, "ignored": True}
+                        )
         link_check_options = [
             {"run_id": row.run_id, "started_at": row.started_at}
             for row in repo.list_link_check_run_history(job_id, limit=300)

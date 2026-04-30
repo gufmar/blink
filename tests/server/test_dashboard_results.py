@@ -170,15 +170,20 @@ def test_api_results_endpoints(tmp_path: Path) -> None:
     assert structure_payload["external_mode"] == "none"
     assert structure_payload["nodes"]["name"] == "/"
     assert structure_payload["nodes"]["node_kind"] == "internal_root"
-    structure_with_external = client.get(
-        f"/api/results/jobs/zzz/runs/{run_id}/structure?external_mode=failed_ignored"
+    structure_with_failed_external = client.get(
+        f"/api/results/jobs/zzz/runs/{run_id}/structure?external_mode=failed"
     )
-    assert structure_with_external.status_code == 200
-    structure_ext_payload = structure_with_external.json()
+    assert structure_with_failed_external.status_code == 200
+    structure_ext_payload = structure_with_failed_external.json()
     raw_json = json.dumps(structure_ext_payload)
-    assert structure_ext_payload["external_mode"] == "failed_ignored"
+    assert structure_ext_payload["external_mode"] == "failed"
     assert "external_domain" in raw_json
     assert "external_url" in raw_json
+    structure_with_ignored_external = client.get(
+        f"/api/results/jobs/zzz/runs/{run_id}/structure?external_mode=ignored"
+    )
+    assert structure_with_ignored_external.status_code == 200
+    assert structure_with_ignored_external.json()["external_mode"] == "ignored"
     structure_from_link_check = client.get(
         f"/api/results/jobs/zzz/runs/{link_check_run_id}/structure?task_type=link_check"
     )
@@ -226,11 +231,10 @@ def test_dashboard_results_pages(tmp_path: Path) -> None:
         f"/dashboard/results/zzz/runs/{link_check_run_id}/structure?task_type=link_check"
     )
     assert structure_from_link_check_page.status_code == 200
-    structure_external_page = client.get(
-        f"/dashboard/results/zzz/runs/{run_id}/structure?external_mode=failed_ignored"
-    )
+    structure_external_page = client.get(f"/dashboard/results/zzz/runs/{run_id}/structure?external_mode=failed")
     assert structure_external_page.status_code == 200
-    assert "failed + ignored" in structure_external_page.text
+    assert "failed only" in structure_external_page.text
+    assert "ignored only" in structure_external_page.text
 
 
 def test_dashboard_results_pages_honor_proxy_root_path(tmp_path: Path) -> None:
