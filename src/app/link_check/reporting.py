@@ -9,12 +9,13 @@ from typing import Any
 
 from app.persistence.repository import LinkCheckResultRecord
 
-_TIMEOUT_TOKENS = ("timed out", "timeout")
+_TIMEOUT_TOKENS = ("timed out", "timeout", "err_timed_out")
 _DNS_TOKENS = (
     "name or service not known",
     "temporary failure in name resolution",
     "dns",
     "nodename nor servname provided",
+    "err_name_not_resolved",
 )
 _CONNECTION_TOKENS = (
     "connection refused",
@@ -26,6 +27,9 @@ _CONNECTION_TOKENS = (
     "too many redirects",
     "dns",
     "urlopen error",
+    "err_connection_refused",
+    "err_connection_reset",
+    "err_internet_disconnected",
 )
 
 

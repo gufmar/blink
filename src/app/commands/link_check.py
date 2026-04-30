@@ -13,6 +13,7 @@ from rich.table import Table
 from app.config.loader import load_effective_job_config
 from app.config.schema import validate_job_config
 from app.link_check.http_client import HttpCheckResult, HttpLinkChecker
+from app.link_check.playwright_checker import PlaywrightLinkChecker, PlaywrightLinkCheckerConfig
 from app.link_check.reporting import build_link_check_report, report_filename, write_link_check_report
 from app.link_check.runner import run_link_check
 from app.models.job_config import JobConfig
@@ -25,6 +26,7 @@ from app.runtime.job_paths import build_job_paths
 from app.runtime.job_prepare import prepare_job_database, prepare_job_runtime
 from app.runtime.logging import configure_logging, event_logger
 from app.runtime.status import LiveStatus
+from app.render.playwright_client import BrowserSettings, BrowserViewport
 
 link_check_app = typer.Typer(help="Run Blink link checks.")
 ignore_app = typer.Typer(help="Manage manual ignore rules for external link failures.")
@@ -35,6 +37,51 @@ def _emit_runtime_notes(notes: list[str]) -> None:
     for line in notes:
         typer.secho(line, fg=typer.colors.CYAN)
         event_logger("runtime.job_layout").info(line)
+
+
+def _browser_settings_from_config(config: JobConfig) -> BrowserSettings:
+    browser_cfg = config["crawl"]["browser"]
+    return BrowserSettings(
+        user_agent=config["crawl"]["user_agent"],
+        viewport=BrowserViewport(
+            width=browser_cfg["viewport"]["width"],
+            height=browser_cfg["viewport"]["height"],
+        ),
+        locale=browser_cfg["locale"],
+        timezone_id=browser_cfg["timezone_id"],
+        extra_http_headers=browser_cfg["extra_http_headers"],
+        storage_state_path=browser_cfg["storage_state_path"],
+        persist_storage_state=browser_cfg["persist_storage_state"],
+        headless=browser_cfg["headless"],
+        block_request_netloc_contains=browser_cfg["block_request_netloc_contains"],
+    )
+
+
+def _build_link_checker(config: JobConfig, *, artifacts_dir: Path):
+    implementation = str(config["link_check"]["implementation"]).strip().lower()
+    if implementation == "http":
+        return HttpLinkChecker(
+            timeout_seconds=config["link_check"]["request_timeout_seconds"],
+            follow_redirects=config["link_check"]["follow_redirects"],
+            artifacts_dir=artifacts_dir,
+            save_failure_screenshot=config["link_check"]["save_failure_screenshot"],
+        )
+    if implementation == "playwright":
+        if not config["link_check"]["follow_redirects"]:
+            event_logger("linkcheck.redirects").warning(
+                "link_check.follow_redirects=false is ignored for Playwright implementation."
+            )
+        return PlaywrightLinkChecker(
+            browser_settings=_browser_settings_from_config(config),
+            config=PlaywrightLinkCheckerConfig(
+                navigation_timeout_seconds=config["link_check"]["playwright"]["navigation_timeout_seconds"],
+                network_idle_seconds=config["link_check"]["playwright"]["network_idle_seconds"],
+                settle_wait_seconds=config["link_check"]["playwright"]["settle_wait_seconds"],
+                artifacts_dir=artifacts_dir,
+                save_failure_screenshot=config["link_check"]["save_failure_screenshot"],
+            ),
+        )
+    raise ValueError(f"Unsupported link_check.implementation: {implementation}")
 
 
 def _render_rows_table(rows: list[dict[str, object]]) -> None:
@@ -621,12 +668,10 @@ def run(
         connection = connect_sqlite(db_path)
         initialize_schema(connection)
         repository = CrawlRepository(connection)
-        checker = HttpLinkChecker(
-            timeout_seconds=config["link_check"]["request_timeout_seconds"],
-            follow_redirects=config["link_check"]["follow_redirects"],
-            artifacts_dir=paths.artifacts_dir,
-            save_failure_screenshot=config["link_check"]["save_failure_screenshot"],
-        )
+        checker = _build_link_checker(config, artifacts_dir=paths.artifacts_dir)
+        open_session = getattr(checker, "open_session", None)
+        if callable(open_session):
+            open_session()
         selected_run_id = run_id if run_id is not None else repository.get_latest_run_id(config["meta"]["job_id"])
         link_check_run_id: int | None = None
         source_refs_by_target: dict[str, list[dict[str, str | None]]] = {}
@@ -694,6 +739,9 @@ def run(
                     reportable_failures_total=summary.reportable_failures,
                 )
         finally:
+            close_session = getattr(checker, "close_session", None)
+            if callable(close_session):
+                close_session()
             connection.close()
             status.update("Link-check finished")
 

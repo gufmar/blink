@@ -30,6 +30,7 @@ def test_link_check_run_writes_json_report_when_enabled(tmp_path, monkeypatch) -
     def fake_load_effective_job_config(job: str):  # noqa: ANN001
         cfg = load_effective_job_config(job)
         cfg["link_check"]["write_json_report"] = True
+        cfg["link_check"]["implementation"] = "http"
         cfg["link_check"]["retry_count"] = 0
         cfg["link_check"]["enabled"] = True
         cfg["meta"]["job_id"] = "cardano.org"
@@ -119,6 +120,7 @@ def test_link_check_run_prints_source_pages_for_live_failures(tmp_path, monkeypa
     def fake_load_effective_job_config(job: str):  # noqa: ANN001
         cfg = load_effective_job_config(job)
         cfg["link_check"]["write_json_report"] = False
+        cfg["link_check"]["implementation"] = "http"
         cfg["link_check"]["retry_count"] = 0
         cfg["link_check"]["enabled"] = True
         cfg["meta"]["job_id"] = "cardano.org"
@@ -196,6 +198,7 @@ def test_link_check_run_max_blinks_reports_new_across_runs(tmp_path, monkeypatch
     def fake_load_effective_job_config(job: str):  # noqa: ANN001
         cfg = load_effective_job_config(job)
         cfg["link_check"]["write_json_report"] = False
+        cfg["link_check"]["implementation"] = "http"
         cfg["link_check"]["retry_count"] = 0
         cfg["link_check"]["enabled"] = True
         cfg["meta"]["job_id"] = "cardano.org"

@@ -93,6 +93,23 @@ URL behavior is split by concern:
 - `crawl.url_normalization.external.store_raw_href` preserves exact external hrefs for persistence/reporting.
 - `link_check.target_url_policy.request.keep_query|keep_fragment` controls the URL form used for outbound link-check requests.
 - `link_check.ignore.http_status` controls ignored HTTP status codes, and `link_check.ignore.url_schemes` controls ignored URL schemes (for example `mailto`) during link-check execution.
+- `link_check.implementation` selects checker runtime: `playwright` (default, browser-like behavior) or `http` (legacy urllib fallback).
+- `link_check.playwright.navigation_timeout_seconds|network_idle_seconds|settle_wait_seconds` tunes Playwright link-check timing.
+
+Example:
+
+```json
+"link_check": {
+  "implementation": "playwright",
+  "playwright": {
+    "navigation_timeout_seconds": 10,
+    "network_idle_seconds": 4,
+    "settle_wait_seconds": 2
+  }
+}
+```
+
+`link_check.follow_redirects` only applies to `implementation: "http"`. Browser-based checks always follow redirects.
 
 Run crawl using default per-job DB path:
 

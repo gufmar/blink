@@ -206,18 +206,25 @@
       "additionalProperties": false,
       "required": [
         "enabled",
+        "implementation",
         "request_timeout_seconds",
         "retry_count",
         "consecutive_failures_before_alert",
         "ignore",
         "target_url_policy",
         "follow_redirects",
+        "playwright",
         "write_json_report",
         "save_failure_screenshot",
         "tolerance"
       ],
       "properties": {
         "enabled": { "type": "boolean" },
+        "implementation": {
+          "type": "string",
+          "enum": ["playwright", "http"],
+          "default": "playwright"
+        },
         "request_timeout_seconds": { "type": "integer", "minimum": 1 },
         "retry_count": { "type": "integer", "minimum": 0, "maximum": 10 },
         "consecutive_failures_before_alert": {
@@ -227,6 +234,20 @@
         "ignore": { "$ref": "#/$defs/linkCheckIgnore" },
         "target_url_policy": { "$ref": "#/$defs/linkCheckTargetUrlPolicy" },
         "follow_redirects": { "type": "boolean" },
+        "playwright": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "navigation_timeout_seconds",
+            "network_idle_seconds",
+            "settle_wait_seconds"
+          ],
+          "properties": {
+            "navigation_timeout_seconds": { "type": "integer", "minimum": 1 },
+            "network_idle_seconds": { "type": "integer", "minimum": 0 },
+            "settle_wait_seconds": { "type": "integer", "minimum": 0 }
+          }
+        },
         "write_json_report": { "type": "boolean", "default": false },
         "save_failure_screenshot": { "type": "boolean", "default": true },
         "tolerance": {

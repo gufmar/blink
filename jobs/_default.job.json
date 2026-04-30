@@ -104,6 +104,7 @@
   },
   "link_check": {
     "enabled": true,
+    "implementation": "playwright",
     "request_timeout_seconds": 10,
     "retry_count": 1,
     "consecutive_failures_before_alert": 2,
@@ -136,6 +137,11 @@
       }
     },
     "follow_redirects": true,
+    "playwright": {
+      "navigation_timeout_seconds": 10,
+      "network_idle_seconds": 4,
+      "settle_wait_seconds": 2
+    },
     "write_json_report": true,
     "save_failure_screenshot": true,
     "tolerance": {
