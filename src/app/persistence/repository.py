@@ -93,6 +93,15 @@ class PageTextRecord:
 
 
 @dataclass(frozen=True)
+class PageExternalCountRecord:
+    url: str
+    depth: int
+    status_code: int | None
+    ok: bool
+    external_count: int
+
+
+@dataclass(frozen=True)
 class LinkCheckResultRecord:
     row_id: int
     crawl_link_id: int
@@ -2091,6 +2100,38 @@ class CrawlRepository:
                 target_url=str(row["target_url"]),
                 first_seen_at=str(row["first_seen_at"]),
                 seen_count=int(row["seen_count"]),
+            )
+            for row in rows
+        ]
+
+    def list_page_external_link_counts(self, run_id: int, *, limit: int = 5000) -> list[PageExternalCountRecord]:
+        rows = self._connection.execute(
+            """
+            SELECT
+                p.url AS url,
+                rp.depth AS depth,
+                rp.status_code AS status_code,
+                rp.ok AS ok,
+                COUNT(rpe.external_link_id) AS external_count
+            FROM run_pages rp
+            JOIN pages p ON p.id = rp.page_id
+            LEFT JOIN run_page_external_links rpe
+                ON rpe.run_id = rp.run_id
+               AND rpe.page_id = rp.page_id
+            WHERE rp.run_id = ?
+            GROUP BY p.url, rp.depth, rp.status_code, rp.ok
+            ORDER BY p.url ASC
+            LIMIT ?
+            """,
+            (run_id, limit),
+        ).fetchall()
+        return [
+            PageExternalCountRecord(
+                url=str(row["url"]),
+                depth=int(row["depth"]),
+                status_code=int(row["status_code"]) if row["status_code"] is not None else None,
+                ok=bool(row["ok"]),
+                external_count=int(row["external_count"] or 0),
             )
             for row in rows
         ]

@@ -93,6 +93,27 @@ def test_run_page_external_links_and_source_query(tmp_path) -> None:
     connection.close()
 
 
+def test_list_page_external_link_counts_by_run(tmp_path) -> None:
+    connection = connect_sqlite(tmp_path / "crawl.db")
+    initialize_schema(connection)
+    repo = CrawlRepository(connection)
+    run_id = repo.create_run("job-structure")
+    repo.add_page_result(run_id, "https://example.org", 0, 200, True)
+    repo.add_page_result(run_id, "https://example.org/docs", 1, 200, True)
+    repo.add_page_result(run_id, "https://example.org/empty", 1, 200, True)
+    repo.add_link(run_id, "https://example.org", "https://ext-a.example", False)
+    repo.add_link(run_id, "https://example.org/docs", "https://ext-b.example", False)
+    repo.add_link(run_id, "https://example.org/docs", "https://ext-c.example", False)
+    repo.finish_run(run_id, 3, 0, 3)
+
+    rows = repo.list_page_external_link_counts(run_id, limit=20)
+    by_url = {row.url: row.external_count for row in rows}
+    assert by_url["https://example.org"] == 1
+    assert by_url["https://example.org/docs"] == 2
+    assert by_url["https://example.org/empty"] == 0
+    connection.close()
+
+
 def test_compute_page_text_metrics_between_runs(tmp_path) -> None:
     connection = connect_sqlite(tmp_path / "crawl.db")
     initialize_schema(connection)

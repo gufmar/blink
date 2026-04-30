@@ -9,7 +9,7 @@ import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import unquote, urlencode, urlsplit
 
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -36,6 +36,7 @@ from app.server.dashboard_page import (
     render_results_job_html,
     render_results_jobs_html,
     render_results_run_html,
+    render_results_structure_html,
     render_schedule_dashboard_html,
 )
 
@@ -263,6 +264,89 @@ def _serialize_link_check_history(job_id: str, repo: CrawlRepository | None, *, 
         }
         for rec in runs
     ]
+
+
+def _split_url_path_segments(url: str) -> list[str]:
+    parsed = urlsplit(url)
+    raw_path = parsed.path or "/"
+    segments = [unquote(part).strip() for part in raw_path.split("/") if part.strip()]
+    return segments
+
+
+def _build_structure_tree_payload(
+    *,
+    job_id: str,
+    run_id: int,
+    page_rows: list[Any],
+    details_url: str,
+) -> dict[str, Any]:
+    root: dict[str, Any] = {
+        "id": "/",
+        "name": "/",
+        "full_path": "/",
+        "url": "/",
+        "external_count": 0,
+        "ok": True,
+        "details_url": details_url,
+        "children": [],
+    }
+    index: dict[str, dict[str, Any]] = {"/": root}
+    node_count = 1
+    leaf_count = 0
+
+    for row in page_rows:
+        page_url = str(getattr(row, "url", "") or "").strip()
+        if not page_url:
+            continue
+        segments = _split_url_path_segments(page_url)
+        path_parts: list[str] = []
+        parent = root
+        for segment in segments:
+            path_parts.append(segment)
+            full_path = "/" + "/".join(path_parts)
+            node = index.get(full_path)
+            if node is None:
+                node = {
+                    "id": full_path,
+                    "name": segment,
+                    "full_path": full_path,
+                    "url": None,
+                    "external_count": 0,
+                    "ok": True,
+                    "details_url": "",
+                    "children": [],
+                }
+                index[full_path] = node
+                parent["children"].append(node)
+                node_count += 1
+            parent = node
+
+        leaf = parent if segments else root
+        leaf["url"] = page_url
+        leaf["details_url"] = details_url
+        leaf["external_count"] = int(getattr(row, "external_count", 0) or 0)
+        leaf["ok"] = bool(getattr(row, "ok", False))
+        leaf_count += 1
+
+    def rollup(node: dict[str, Any]) -> int:
+        children = list(node.get("children") or [])
+        if not children:
+            return int(node.get("external_count") or 0)
+        subtotal = int(node.get("external_count") or 0)
+        for child in children:
+            subtotal += rollup(child)
+        node["external_count"] = subtotal
+        return subtotal
+
+    rollup(root)
+    return {
+        "job_id": job_id,
+        "run_id": run_id,
+        "metric": "external_count",
+        "node_count": node_count,
+        "leaf_count": leaf_count,
+        "nodes": root,
+    }
 
 
 async def schedule_dashboard(request: Request) -> HTMLResponse:
@@ -602,6 +686,29 @@ async def api_results_run_detail(request: Request) -> JSONResponse:
         _close_repo(repo_and_conn)
 
 
+async def api_results_run_structure(request: Request) -> JSONResponse:
+    jobs_root: Path = request.app.state.jobs_root
+    job_id = str(request.path_params["job_id"])
+    run_id = int(request.path_params["run_id"])
+    job = _job_entry_by_id(jobs_root, job_id)
+    if job is None:
+        return _json_error(404, "job_not_found")
+    repo_and_conn = _open_repo_if_exists(_db_path_for_job(jobs_root, job_id))
+    if repo_and_conn is None:
+        return _json_error(404, "run_not_found")
+    repo, _ = repo_and_conn
+    try:
+        run = repo.get_run_record(job_id=job_id, run_id=run_id)
+        if run is None:
+            return _json_error(404, "run_not_found")
+        page_rows = repo.list_page_external_link_counts(run_id, limit=10_000)
+        details_url = f"{_path_for(request, 'dashboard_results_run', job_id=job_id, run_id=run_id)}?task_type=crawl"
+        payload = _build_structure_tree_payload(job_id=job_id, run_id=run_id, page_rows=page_rows, details_url=details_url)
+        return JSONResponse(payload)
+    finally:
+        _close_repo(repo_and_conn)
+
+
 async def dashboard_results_jobs(request: Request) -> HTMLResponse:
     jobs_root: Path = request.app.state.jobs_root
     jobs = _load_job_entries(jobs_root)
@@ -910,12 +1017,58 @@ async def dashboard_results_run(request: Request) -> HTMLResponse:
                 include_status_q=include_status,
                 include_category_q=include_category,
             ),
+            "structure": _path_for(request, "dashboard_results_structure", job_id=job_id, run_id=run_id),
             "jobs_index": _path_for(request, "dashboard_results_job_history", job_id=job_id),
             "refresh": with_filters(
                 base_run_path,
                 include_status_q=include_status,
                 include_category_q=include_category,
             ),
+            **_branding_links(request),
+        },
+    )
+    return HTMLResponse(page)
+
+
+async def dashboard_results_structure(request: Request) -> HTMLResponse:
+    jobs_root: Path = request.app.state.jobs_root
+    job_id = str(request.path_params["job_id"])
+    run_id = int(request.path_params["run_id"])
+    job = _job_entry_by_id(jobs_root, job_id)
+    if job is None:
+        return HTMLResponse("Job not found", status_code=404)
+    repo_and_conn = _open_repo_if_exists(_db_path_for_job(jobs_root, job_id))
+    if repo_and_conn is None:
+        return HTMLResponse("Run not found", status_code=404)
+    repo, _ = repo_and_conn
+    try:
+        run = repo.get_run_record(job_id=job_id, run_id=run_id)
+        if run is None:
+            return HTMLResponse("Run not found", status_code=404)
+        page_rows = repo.list_page_external_link_counts(run_id, limit=10_000)
+    finally:
+        _close_repo(repo_and_conn)
+    run_page_url = f"{_path_for(request, 'dashboard_results_run', job_id=job_id, run_id=run_id)}?task_type=crawl"
+    structure_payload = _build_structure_tree_payload(
+        job_id=job_id,
+        run_id=run_id,
+        page_rows=page_rows,
+        details_url=run_page_url,
+    )
+    page = render_results_structure_html(
+        job=job,
+        run={
+            "run_id": run_id,
+            "started_at": run.started_at,
+            "finished_at": run.finished_at,
+        },
+        tree_payload=structure_payload,
+        links={
+            "main_dashboard": _path_for(request, "dashboard_schedule"),
+            "run": run_page_url,
+            "structure_json": _path_for(request, "api_results_run_structure", job_id=job_id, run_id=run_id),
+            "jobs_index": _path_for(request, "dashboard_results_job_history", job_id=job_id),
+            "refresh": _path_for(request, "dashboard_results_structure", job_id=job_id, run_id=run_id),
             **_branding_links(request),
         },
     )
@@ -1151,6 +1304,12 @@ def build_app(
                 methods=["GET"],
                 name="api_results_run_detail",
             ),
+            Route(
+                "/api/results/jobs/{job_id}/runs/{run_id:int}/structure",
+                api_results_run_structure,
+                methods=["GET"],
+                name="api_results_run_structure",
+            ),
             Route("/dashboard", schedule_dashboard, methods=["GET"], name="dashboard_schedule"),
             Route("/dashboard/results", dashboard_results_jobs, methods=["GET"], name="dashboard_results_jobs"),
             Route(
@@ -1170,6 +1329,12 @@ def build_app(
                 dashboard_results_run,
                 methods=["GET"],
                 name="dashboard_results_run",
+            ),
+            Route(
+                "/dashboard/results/{job_id}/runs/{run_id:int}/structure",
+                dashboard_results_structure,
+                methods=["GET"],
+                name="dashboard_results_structure",
             ),
             Route("/notifications/slack/events", slack_events, methods=["POST"], name="slack_events"),
             Route("/notifications/slack/job/{job_slug}", slack_job_event, methods=["POST"], name="slack_job_event"),

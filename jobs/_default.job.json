@@ -33,7 +33,7 @@
     "timeouts": {
       "navigation_seconds": 20,
       "network_idle_seconds": 4,
-      "playwright_wait_seconds": 2
+      "playwright_wait_seconds": 5
     },
     "retry_count": 2,
     "max_response_bytes": 2000000,
@@ -82,7 +82,8 @@
       "block_request_netloc_contains": [
         "google-analytics.com",
         "googletagmanager.com",
-        "google.com"
+        "google.com",
+        "googleapis.com"
       ]
     },
     "observability": {

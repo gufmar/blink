@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import json
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
@@ -640,6 +641,142 @@ def render_results_job_html(
     )
 
 
+def render_results_structure_html(
+    *,
+    job: dict[str, Any],
+    run: dict[str, Any],
+    tree_payload: dict[str, Any],
+    links: dict[str, str],
+) -> str:
+    """Render radial tidy tree structure view for one crawl run."""
+    tree_json = esc(json.dumps(tree_payload, separators=(",", ":"), ensure_ascii=True))
+    return _render_results_shell(
+        title=f"Blink structure · {esc(job.get('job_id', ''))} run {esc(run.get('run_id', ''))}",
+        heading=f"Structure · {esc(job.get('job_id', ''))}",
+        subtitle=f"{esc(job.get('name', ''))} · run {esc(run.get('run_id', ''))}",
+        nav_links=[
+            ("Main dashboard", links.get("main_dashboard", "")),
+            ("Back to run", links.get("run", "")),
+            ("Structure JSON", links.get("structure_json", "")),
+            ("Jobs", links.get("jobs_index", "")),
+        ],
+        panel_title="URL path radial tree",
+        table_headers=["Field", "Value"],
+        table_rows=(
+            f"<tr><td>Metric</td><td class=\"mono\">{esc(tree_payload.get('metric') or 'external_count')}</td></tr>"
+            f"<tr><td>Node count</td><td class=\"mono\">{esc(tree_payload.get('node_count') or 0)}</td></tr>"
+            f"<tr><td>Leaf pages</td><td class=\"mono\">{esc(tree_payload.get('leaf_count') or 0)}</td></tr>"
+        ),
+        footer_link=links.get("refresh", ""),
+        footer_label="Refresh",
+        body_extra=f"""
+<section class="panel" aria-label="Radial tree chart" style="margin-top: 1rem;">
+  <div class="panel-head">Radial tidy tree</div>
+  <div style="padding: 0.75rem 1rem; display: flex; gap: 1rem; flex-wrap: wrap; align-items: center;">
+    <label>Color by
+      <select id="colorBy"><option value="external_count" selected>external links</option></select>
+    </label>
+    <label>Size by
+      <select id="sizeBy">
+        <option value="external_count" selected>external links</option>
+        <option value="fixed">fixed</option>
+      </select>
+    </label>
+  </div>
+  <div id="radial-tree" style="width: 100%; overflow: auto; padding: 0 0.5rem 1rem 0.5rem;"></div>
+  <div id="node-popover" class="panel" style="margin: 0.75rem 1rem 1rem 1rem; display: none;">
+    <div class="panel-head">Node details</div>
+    <div id="node-popover-content" style="padding: 0.75rem 1rem;"></div>
+  </div>
+</section>
+<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+<script>
+(() => {{
+  const payload = JSON.parse("{tree_json}");
+  const host = document.getElementById("radial-tree");
+  const popover = document.getElementById("node-popover");
+  const popoverContent = document.getElementById("node-popover-content");
+  const colorBy = document.getElementById("colorBy");
+  const sizeBy = document.getElementById("sizeBy");
+  const width = 1000;
+  const radius = width / 2;
+
+  function flatten(node, out = []) {{
+    out.push(node);
+    (node.children || []).forEach((child) => flatten(child, out));
+    return out;
+  }}
+
+  function render() {{
+    host.innerHTML = "";
+    const root = d3.hierarchy(payload.nodes);
+    d3.tree().size([2 * Math.PI, radius - 120])(root);
+    const allNodes = flatten(payload.nodes);
+    const maxExternal = Math.max(1, ...allNodes.map((n) => n.external_count || 0));
+    const colorScale = d3.scaleSequential([0, maxExternal], d3.interpolateBlues);
+    const sizeScale = d3.scaleSqrt().domain([0, maxExternal]).range([2.5, 8]);
+
+    const svg = d3.create("svg")
+      .attr("viewBox", [-radius, -radius, width, width])
+      .attr("width", width)
+      .attr("height", width)
+      .style("font", "11px sans-serif");
+
+    svg.append("g")
+      .attr("fill", "none")
+      .attr("stroke", "#cbd5e1")
+      .attr("stroke-opacity", 0.8)
+      .selectAll("path")
+      .data(root.links())
+      .join("path")
+      .attr("d", d3.linkRadial().angle((d) => d.x).radius((d) => d.y));
+
+    const node = svg.append("g")
+      .selectAll("g")
+      .data(root.descendants())
+      .join("g")
+      .attr("transform", (d) => `rotate(${{(d.x * 180 / Math.PI) - 90}}) translate(${{d.y}},0)`);
+
+    node.append("circle")
+      .attr("r", (d) => sizeBy.value === "fixed" ? 4 : sizeScale(d.data.external_count || 0))
+      .attr("fill", (d) => colorScale(d.data.external_count || 0))
+      .attr("stroke", "#1e293b")
+      .attr("stroke-width", 0.6)
+      .style("cursor", "pointer")
+      .on("click", (_event, d) => {{
+        const url = d.data.url || d.data.full_path || "/";
+        const detailsLink = d.data.details_url ? `<a href="${{d.data.details_url}}">Open run details</a>` : "";
+        popoverContent.innerHTML = `
+          <div><strong>Path:</strong> <span class="mono">${{url}}</span></div>
+          <div><strong>External links:</strong> <span class="mono">${{d.data.external_count || 0}}</span></div>
+          <div><strong>Status:</strong> <span class="mono">${{d.data.ok === false ? "failed" : "ok"}}</span></div>
+          <div style="margin-top: 0.4rem;">${{detailsLink}}</div>
+        `;
+        popover.style.display = "block";
+      }});
+
+    node.append("text")
+      .attr("dy", "0.31em")
+      .attr("x", (d) => d.x < Math.PI === !d.children ? 8 : -8)
+      .attr("text-anchor", (d) => d.x < Math.PI === !d.children ? "start" : "end")
+      .attr("transform", (d) => d.x >= Math.PI ? "rotate(180)" : null)
+      .text((d) => d.data.name || "/")
+      .clone(true).lower()
+      .attr("stroke", "white");
+
+    host.append(svg.node());
+  }}
+
+  colorBy.addEventListener("change", render);
+  sizeBy.addEventListener("change", render);
+  render();
+}})();
+</script>
+""",
+        branding_links=links,
+    )
+
+
 def render_job_task_history_html(
     *,
     job: dict[str, Any],
@@ -863,6 +1000,7 @@ def render_results_run_html(
             ("Main dashboard", links.get("main_dashboard", "")),
             ("Back to job", links.get("job", "")),
             ("Run JSON", links.get("run_json", "")),
+            ("Structure", links.get("structure", "")),
             ("Jobs", links.get("jobs_index", "")),
         ],
         panel_title="Overview",

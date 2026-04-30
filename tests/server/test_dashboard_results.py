@@ -143,6 +143,13 @@ def test_api_results_endpoints(tmp_path: Path) -> None:
     assert detail_payload["failed_overview"]["failed_total"] == 1
     assert detail_payload["failed_overview"]["ignored_total"] == 1
     assert detail_payload["ignored_links"][0]["target_url"] == "https://ignored.example.net"
+    structure = client.get(f"/api/results/jobs/zzz/runs/{run_id}/structure")
+    assert structure.status_code == 200
+    structure_payload = structure.json()
+    assert structure_payload["job_id"] == "zzz"
+    assert structure_payload["run_id"] == run_id
+    assert structure_payload["metric"] == "external_count"
+    assert structure_payload["nodes"]["name"] == "/"
 
 
 def test_dashboard_results_pages(tmp_path: Path) -> None:
@@ -171,6 +178,12 @@ def test_dashboard_results_pages(tmp_path: Path) -> None:
     assert "Apply filters" in run_page.text
     assert "Field" not in run_page.text
 
+    structure_page = client.get(f"/dashboard/results/zzz/runs/{run_id}/structure")
+    assert structure_page.status_code == 200
+    assert "Radial tidy tree" in structure_page.text
+    assert "Structure JSON" in structure_page.text
+    assert "Open run details" in structure_page.text
+
 
 def test_dashboard_results_pages_honor_proxy_root_path(tmp_path: Path) -> None:
     _, run_id = _setup_job_with_data(tmp_path)
@@ -184,6 +197,9 @@ def test_dashboard_results_pages_honor_proxy_root_path(tmp_path: Path) -> None:
     job_page = client.get("/dashboard/results/zzz")
     assert job_page.status_code == 200
     assert f"/blink/dashboard/results/zzz/runs/{run_id}?task_type=crawl" in job_page.text
+    run_page = client.get(f"/dashboard/results/zzz/runs/{run_id}")
+    assert run_page.status_code == 200
+    assert f"/blink/dashboard/results/zzz/runs/{run_id}/structure" in run_page.text
 
 
 def test_dashboard_results_pages_honor_configured_base_path(tmp_path: Path) -> None:
@@ -200,3 +216,4 @@ def test_dashboard_results_pages_honor_configured_base_path(tmp_path: Path) -> N
     assert "/blink/api/results/jobs/zzz/runs/" in run_page.text
     assert "Clear" in run_page.text
     assert "exclude_status=403" in run_page.text
+    assert f"/blink/dashboard/results/zzz/runs/{run_id}/structure" in run_page.text
