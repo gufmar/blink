@@ -689,7 +689,11 @@ def render_results_structure_html(
   <div class="panel-head">Radial tidy tree</div>
   <div style="padding: 0.75rem 1rem; display: flex; gap: 1rem; flex-wrap: wrap; align-items: center;">
     <label>Color by
-      <select id="colorBy"><option value="external_count" selected>external links</option></select>
+      <select id="colorBy">
+        <option value="external_count" selected>external links</option>
+        <option value="failed_count">failed links</option>
+        <option value="ignored_count">ignored links</option>
+      </select>
     </label>
     <label>Size by
       <select id="sizeBy">
@@ -737,7 +741,10 @@ def render_results_structure_html(
     const keyForSize = sizeBy.value || "external_count";
     const maxMetric = Math.max(1, ...allNodes.map((n) => n[key] || 0));
     const maxSizeMetric = Math.max(1, ...allNodes.map((n) => n[keyForSize] || 0));
-    const colorScale = d3.scaleSequential([0, maxMetric], d3.interpolateBlues);
+    const colorInterpolator = (key === "failed_count" || key === "ignored_count")
+      ? d3.interpolateRgb("#ffffff", "#dc2626")
+      : d3.interpolateBlues;
+    const colorScale = d3.scaleSequential([0, maxMetric], colorInterpolator);
     const sizeScale = d3.scaleSqrt().domain([0, maxSizeMetric]).range([2.5, 8]);
 
     const svg = d3.create("svg")
@@ -768,17 +775,27 @@ def render_results_structure_html(
       .attr("stroke-width", 0.6)
       .style("cursor", "pointer")
       .on("click", (_event, d) => {{
+        if (d.data.children && d.data.children.length > 0) {{
+          d.data._children = d.data.children;
+          d.data.children = [];
+        }} else if (d.data._children && d.data._children.length > 0) {{
+          d.data.children = d.data._children;
+          d.data._children = [];
+        }}
         const url = d.data.url || d.data.full_path || "/";
         const detailsLink = d.data.details_url ? `<a href="${{d.data.details_url}}">Open run details</a>` : "";
+        const collapsedState = d.data._children && d.data._children.length > 0 ? "collapsed" : "expanded";
         popoverContent.innerHTML = `
           <div><strong>Path:</strong> <span class="mono">${{url}}</span></div>
           <div><strong>External links:</strong> <span class="mono">${{d.data.external_count || 0}}</span></div>
           <div><strong>Failed links:</strong> <span class="mono">${{d.data.failed_count || 0}}</span></div>
           <div><strong>Ignored links:</strong> <span class="mono">${{d.data.ignored_count || 0}}</span></div>
+          <div><strong>Node state:</strong> <span class="mono">${{collapsedState}}</span></div>
           <div><strong>Status:</strong> <span class="mono">${{d.data.ok === false ? "failed" : "ok"}}</span></div>
           <div style="margin-top: 0.4rem;">${{detailsLink}}</div>
         `;
         popover.style.display = "block";
+        render();
       }});
 
     node.append("text")
