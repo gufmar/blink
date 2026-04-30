@@ -652,6 +652,7 @@ def render_results_structure_html(
     tree_json_raw = json.dumps(tree_payload, separators=(",", ":"), ensure_ascii=True)
     link_check_options: list[dict[str, Any]] = list(links.get("link_check_options") or [])
     selected_link_check_id = links.get("selected_link_check_id")
+    selected_external_mode = str(links.get("selected_external_mode") or "none")
     selector_html = ""
     if link_check_options:
         options = ['<option value="">latest per target (all link-check runs)</option>']
@@ -665,6 +666,14 @@ def render_results_structure_html(
             f'<select id="linkCheckRun">{"".join(options)}</select>'
             "</label>"
         )
+    external_selector_html = (
+        '<label>External links'
+        '<select id="externalMode">'
+        f'<option value="none"{" selected" if selected_external_mode == "none" else ""}>none</option>'
+        f'<option value="failed_ignored"{" selected" if selected_external_mode == "failed_ignored" else ""}>failed + ignored</option>'
+        "</select>"
+        "</label>"
+    )
     return _render_results_shell(
         title=f"Blink structure · {esc(job.get('job_id', ''))} run {esc(run.get('run_id', ''))}",
         heading=f"Structure · {esc(job.get('job_id', ''))}",
@@ -704,6 +713,7 @@ def render_results_structure_html(
       </select>
     </label>
     {selector_html}
+    {external_selector_html}
   </div>
   <div id="radial-tree" style="width: 100%; overflow: auto; padding: 0 0.5rem 1rem 0.5rem;"></div>
   <div id="node-popover" class="panel" style="margin: 0.75rem 1rem 1rem 1rem; display: none;">
@@ -723,6 +733,7 @@ def render_results_structure_html(
   const colorBy = document.getElementById("colorBy");
   const sizeBy = document.getElementById("sizeBy");
   const linkCheckRun = document.getElementById("linkCheckRun");
+  const externalMode = document.getElementById("externalMode");
   const width = 1000;
   const radius = width / 2;
 
@@ -783,10 +794,12 @@ def render_results_structure_html(
           d.data._children = [];
         }}
         const url = d.data.url || d.data.full_path || "/";
+        const kind = d.data.node_kind || "internal";
         const detailsLink = d.data.details_url ? `<a href="${{d.data.details_url}}">Open run details</a>` : "";
         const collapsedState = d.data._children && d.data._children.length > 0 ? "collapsed" : "expanded";
         popoverContent.innerHTML = `
           <div><strong>Path:</strong> <span class="mono">${{url}}</span></div>
+          <div><strong>Node kind:</strong> <span class="mono">${{kind}}</span></div>
           <div><strong>External links:</strong> <span class="mono">${{d.data.external_count || 0}}</span></div>
           <div><strong>Failed links:</strong> <span class="mono">${{d.data.failed_count || 0}}</span></div>
           <div><strong>Ignored links:</strong> <span class="mono">${{d.data.ignored_count || 0}}</span></div>
@@ -803,7 +816,7 @@ def render_results_structure_html(
       .attr("x", (d) => d.x < Math.PI === !d.children ? 8 : -8)
       .attr("text-anchor", (d) => d.x < Math.PI === !d.children ? "start" : "end")
       .attr("transform", (d) => d.x >= Math.PI ? "rotate(180)" : null)
-      .text((d) => d.data.name || "/")
+      .text((d) => (d.data.node_kind === "external_domain" ? `@${{d.data.name || ""}}` : (d.data.name || "/")))
       .clone(true).lower()
       .attr("stroke", "white");
 
@@ -821,6 +834,14 @@ def render_results_structure_html(
       }} else {{
         url.searchParams.delete("link_check_run_id");
       }}
+      window.location.href = url.toString();
+    }});
+  }}
+  if (externalMode) {{
+    externalMode.addEventListener("change", () => {{
+      const selected = externalMode.value || "none";
+      const url = new URL(window.location.href);
+      url.searchParams.set("external_mode", selected);
       window.location.href = url.toString();
     }});
   }}

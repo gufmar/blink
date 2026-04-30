@@ -281,14 +281,18 @@ def _build_structure_tree_payload(
     details_url: str,
     failed_counts_by_url: dict[str, int] | None = None,
     ignored_counts_by_url: dict[str, int] | None = None,
+    external_mode: str = "none",
+    external_links_by_source: dict[str, list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     failed_counts_by_url = failed_counts_by_url or {}
     ignored_counts_by_url = ignored_counts_by_url or {}
+    external_links_by_source = external_links_by_source or {}
     root: dict[str, Any] = {
         "id": "/",
         "name": "/",
         "full_path": "/",
         "url": "/",
+        "node_kind": "internal_root",
         "external_count": 0,
         "failed_count": 0,
         "ignored_count": 0,
@@ -317,6 +321,7 @@ def _build_structure_tree_payload(
                     "name": segment,
                     "full_path": full_path,
                     "url": None,
+                    "node_kind": "internal_path",
                     "external_count": 0,
                     "failed_count": 0,
                     "ignored_count": 0,
@@ -331,12 +336,63 @@ def _build_structure_tree_payload(
 
         leaf = parent if segments else root
         leaf["url"] = page_url
+        leaf["node_kind"] = "internal_page" if segments else "internal_root"
         leaf["details_url"] = details_url
         leaf["external_count"] = int(getattr(row, "external_count", 0) or 0)
         leaf["failed_count"] = int(failed_counts_by_url.get(page_url, 0))
         leaf["ignored_count"] = int(ignored_counts_by_url.get(page_url, 0))
         leaf["ok"] = bool(getattr(row, "ok", False))
         leaf_count += 1
+
+        if external_mode == "failed_ignored":
+            ext_rows = list(external_links_by_source.get(page_url) or [])
+            by_domain: dict[str, list[dict[str, Any]]] = {}
+            for ext in ext_rows:
+                target_url = str(ext.get("target_url") or "").strip()
+                if not target_url:
+                    continue
+                domain = str(urlsplit(target_url).netloc or "unknown")
+                by_domain.setdefault(domain, []).append(ext)
+            for domain, links_for_domain in sorted(by_domain.items(), key=lambda pair: pair[0]):
+                domain_id = f"{leaf['id']}::__ext_domain__:{domain}"
+                domain_node: dict[str, Any] = {
+                    "id": domain_id,
+                    "name": domain,
+                    "full_path": domain_id,
+                    "url": None,
+                    "node_kind": "external_domain",
+                    "external_count": 0,
+                    "failed_count": 0,
+                    "ignored_count": 0,
+                    "ok": True,
+                    "details_url": "",
+                    "children": [],
+                }
+                node_count += 1
+                for ext in links_for_domain:
+                    target_url = str(ext.get("target_url") or "").strip()
+                    is_failed = bool(ext.get("failed"))
+                    is_ignored = bool(ext.get("ignored"))
+                    url_node = {
+                        "id": f"{domain_id}::{target_url}",
+                        "name": target_url,
+                        "full_path": target_url,
+                        "url": target_url,
+                        "target_url": target_url,
+                        "node_kind": "external_url",
+                        "external_count": 1,
+                        "failed_count": 1 if is_failed else 0,
+                        "ignored_count": 1 if is_ignored else 0,
+                        "ok": not is_failed,
+                        "details_url": "",
+                        "children": [],
+                    }
+                    domain_node["external_count"] += 1
+                    domain_node["failed_count"] += (1 if is_failed else 0)
+                    domain_node["ignored_count"] += (1 if is_ignored else 0)
+                    domain_node["children"].append(url_node)
+                    node_count += 1
+                leaf["children"].append(domain_node)
 
     def rollup(node: dict[str, Any]) -> int:
         children = list(node.get("children") or [])
@@ -355,6 +411,7 @@ def _build_structure_tree_payload(
         "job_id": job_id,
         "run_id": run_id,
         "metric": "external_count",
+        "external_mode": external_mode,
         "node_count": node_count,
         "leaf_count": leaf_count,
         "nodes": root,
@@ -736,6 +793,9 @@ async def api_results_run_structure(request: Request) -> JSONResponse:
     task_type = str(request.query_params.get("task_type") or "crawl").strip().lower()
     if task_type not in {"crawl", "link_check"}:
         task_type = "crawl"
+    external_mode = str(request.query_params.get("external_mode") or "none").strip().lower()
+    if external_mode not in {"none", "failed_ignored"}:
+        external_mode = "none"
     link_check_run_id_raw = str(request.query_params.get("link_check_run_id") or "").strip()
     link_check_run_id_query = int(link_check_run_id_raw) if link_check_run_id_raw.isdigit() else None
     job = _job_entry_by_id(jobs_root, job_id)
@@ -775,6 +835,18 @@ async def api_results_run_structure(request: Request) -> JSONResponse:
         for records in ignored_refs.values():
             for ref in records:
                 ignored_counts_by_url[ref.source_page_url] = ignored_counts_by_url.get(ref.source_page_url, 0) + 1
+        external_links_by_source: dict[str, list[dict[str, Any]]] = {}
+        if external_mode == "failed_ignored":
+            for target_url, records in failed_refs.items():
+                for ref in records:
+                    external_links_by_source.setdefault(ref.source_page_url, []).append(
+                        {"target_url": target_url, "failed": True, "ignored": False}
+                    )
+            for target_url, records in ignored_refs.items():
+                for ref in records:
+                    external_links_by_source.setdefault(ref.source_page_url, []).append(
+                        {"target_url": target_url, "failed": False, "ignored": True}
+                    )
         details_url = (
             f"{_path_for(request, 'dashboard_results_run', job_id=job_id, run_id=selected_crawl_run_id)}"
             "?task_type=crawl"
@@ -786,6 +858,8 @@ async def api_results_run_structure(request: Request) -> JSONResponse:
             details_url=details_url,
             failed_counts_by_url=failed_counts_by_url,
             ignored_counts_by_url=ignored_counts_by_url,
+            external_mode=external_mode,
+            external_links_by_source=external_links_by_source,
         )
         payload["selected_link_check_run_id"] = selected_link_check_run_id
         return JSONResponse(payload)
@@ -1104,6 +1178,7 @@ async def dashboard_results_run(request: Request) -> HTMLResponse:
             "structure": (
                 f"{_path_for(request, 'dashboard_results_structure', job_id=job_id, run_id=run_id)}?task_type={task_type}"
                 + (f"&link_check_run_id={selected_link_check_run_id}" if selected_link_check_run_id is not None else "")
+                + "&external_mode=none"
             ),
             "jobs_index": _path_for(request, "dashboard_results_job_history", job_id=job_id),
             "refresh": with_filters(
@@ -1124,6 +1199,9 @@ async def dashboard_results_structure(request: Request) -> HTMLResponse:
     task_type = str(request.query_params.get("task_type") or "crawl").strip().lower()
     if task_type not in {"crawl", "link_check"}:
         task_type = "crawl"
+    external_mode = str(request.query_params.get("external_mode") or "none").strip().lower()
+    if external_mode not in {"none", "failed_ignored"}:
+        external_mode = "none"
     link_check_run_id_raw = str(request.query_params.get("link_check_run_id") or "").strip()
     link_check_run_id_query = int(link_check_run_id_raw) if link_check_run_id_raw.isdigit() else None
     job = _job_entry_by_id(jobs_root, job_id)
@@ -1166,6 +1244,18 @@ async def dashboard_results_structure(request: Request) -> HTMLResponse:
         for records in ignored_refs.values():
             for ref in records:
                 ignored_counts_by_url[ref.source_page_url] = ignored_counts_by_url.get(ref.source_page_url, 0) + 1
+        external_links_by_source: dict[str, list[dict[str, Any]]] = {}
+        if external_mode == "failed_ignored":
+            for target_url, records in failed_refs.items():
+                for ref in records:
+                    external_links_by_source.setdefault(ref.source_page_url, []).append(
+                        {"target_url": target_url, "failed": True, "ignored": False}
+                    )
+            for target_url, records in ignored_refs.items():
+                for ref in records:
+                    external_links_by_source.setdefault(ref.source_page_url, []).append(
+                        {"target_url": target_url, "failed": False, "ignored": True}
+                    )
         link_check_options = [
             {"run_id": row.run_id, "started_at": row.started_at}
             for row in repo.list_link_check_run_history(job_id, limit=300)
@@ -1181,6 +1271,8 @@ async def dashboard_results_structure(request: Request) -> HTMLResponse:
         details_url=run_page_url,
         failed_counts_by_url=failed_counts_by_url,
         ignored_counts_by_url=ignored_counts_by_url,
+        external_mode=external_mode,
+        external_links_by_source=external_links_by_source,
     )
     structure_payload["selected_link_check_run_id"] = selected_link_check_run_id
     structure_payload["task_type"] = task_type
@@ -1198,14 +1290,17 @@ async def dashboard_results_structure(request: Request) -> HTMLResponse:
             "structure_json": (
                 f"{_path_for(request, 'api_results_run_structure', job_id=job_id, run_id=run_id)}?task_type={task_type}"
                 + (f"&link_check_run_id={selected_link_check_run_id}" if selected_link_check_run_id is not None else "")
+                + f"&external_mode={external_mode}"
             ),
             "jobs_index": _path_for(request, "dashboard_results_job_history", job_id=job_id),
             "refresh": (
                 f"{_path_for(request, 'dashboard_results_structure', job_id=job_id, run_id=run_id)}?task_type={task_type}"
                 + (f"&link_check_run_id={selected_link_check_run_id}" if selected_link_check_run_id is not None else "")
+                + f"&external_mode={external_mode}"
             ),
             "link_check_options": link_check_options,
             "selected_link_check_id": selected_link_check_run_id,
+            "selected_external_mode": external_mode,
             **_branding_links(request),
         },
     )
