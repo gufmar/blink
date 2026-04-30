@@ -6,12 +6,14 @@ from pathlib import Path
 
 from starlette.testclient import TestClient
 
+from datetime import UTC, datetime
+
 from app.persistence.repository import CrawlRepository
 from app.persistence.sqlite import connect_sqlite, initialize_schema
 from app.server.asgi import build_app
 
 
-def _setup_job_with_data(tmp_path: Path, job_id: str = "zzz") -> tuple[Path, int]:
+def _setup_job_with_data(tmp_path: Path, job_id: str = "zzz") -> tuple[Path, int, int]:
     root = Path(__file__).resolve().parents[2]
     default_src = root / "jobs" / "_default.job.json"
     job_path = tmp_path / f"{job_id}.job.json"
@@ -50,6 +52,11 @@ def _setup_job_with_data(tmp_path: Path, job_id: str = "zzz") -> tuple[Path, int
     repo.finish_run(run_id=old_run, pages_visited=1, pages_failed=0, links_discovered=1)
 
     run_id = repo.create_run(job_id)
+    link_check_run_id = repo.create_link_check_run(
+        job_id=job_id,
+        based_on_crawl_run_id=run_id,
+        started_at=datetime.now(tz=UTC).isoformat(),
+    )
     repo.add_page_result(run_id=run_id, url="https://example.org", depth=0, status_code=200, ok=True)
     repo.add_page_result(
         run_id=run_id,
@@ -78,7 +85,7 @@ def _setup_job_with_data(tmp_path: Path, job_id: str = "zzz") -> tuple[Path, int
     repo.add_link_check_result(
         crawl_link_id=check_target.link_id,
         crawl_run_id=run_id,
-        link_check_run_id=None,
+        link_check_run_id=link_check_run_id,
         target_url=check_target.target_url,
         status_code=404,
         ok=False,
@@ -89,7 +96,7 @@ def _setup_job_with_data(tmp_path: Path, job_id: str = "zzz") -> tuple[Path, int
     repo.add_link_check_result(
         crawl_link_id=ignored_target.link_id,
         crawl_run_id=run_id,
-        link_check_run_id=None,
+        link_check_run_id=link_check_run_id,
         target_url=ignored_target.target_url,
         status_code=403,
         ok=False,
@@ -105,12 +112,23 @@ def _setup_job_with_data(tmp_path: Path, job_id: str = "zzz") -> tuple[Path, int
         reason="allowed for test",
     )
     repo.finish_run(run_id=run_id, pages_visited=2, pages_failed=1, links_discovered=1)
+    repo.finish_link_check_run(
+        link_check_run_id=link_check_run_id,
+        finished_at=datetime.now(tz=UTC).isoformat(),
+        checked_total=2,
+        passed_total=0,
+        failed_total=2,
+        errored_total=0,
+        ignored_total=1,
+        pending_tolerance_total=0,
+        reportable_failures_total=1,
+    )
     conn.close()
-    return job_path, run_id
+    return job_path, run_id, link_check_run_id
 
 
 def test_api_results_endpoints(tmp_path: Path) -> None:
-    _, run_id = _setup_job_with_data(tmp_path)
+    _, run_id, link_check_run_id = _setup_job_with_data(tmp_path)
     app = build_app(jobs_root=tmp_path)
     client = TestClient(app)
 
@@ -150,10 +168,17 @@ def test_api_results_endpoints(tmp_path: Path) -> None:
     assert structure_payload["run_id"] == run_id
     assert structure_payload["metric"] == "external_count"
     assert structure_payload["nodes"]["name"] == "/"
+    structure_from_link_check = client.get(
+        f"/api/results/jobs/zzz/runs/{link_check_run_id}/structure?task_type=link_check"
+    )
+    assert structure_from_link_check.status_code == 200
+    structure_lc_payload = structure_from_link_check.json()
+    assert structure_lc_payload["run_id"] == run_id
+    assert structure_lc_payload["selected_link_check_run_id"] == link_check_run_id
 
 
 def test_dashboard_results_pages(tmp_path: Path) -> None:
-    _, run_id = _setup_job_with_data(tmp_path)
+    _, run_id, link_check_run_id = _setup_job_with_data(tmp_path)
     app = build_app(jobs_root=tmp_path)
     client = TestClient(app)
 
@@ -183,10 +208,16 @@ def test_dashboard_results_pages(tmp_path: Path) -> None:
     assert "Radial tidy tree" in structure_page.text
     assert "Structure JSON" in structure_page.text
     assert "Open run details" in structure_page.text
+    assert "id=\"structure-payload\"" in structure_page.text
+    assert "id=\"linkCheckRun\"" in structure_page.text
+    structure_from_link_check_page = client.get(
+        f"/dashboard/results/zzz/runs/{link_check_run_id}/structure?task_type=link_check"
+    )
+    assert structure_from_link_check_page.status_code == 200
 
 
 def test_dashboard_results_pages_honor_proxy_root_path(tmp_path: Path) -> None:
-    _, run_id = _setup_job_with_data(tmp_path)
+    _, run_id, _ = _setup_job_with_data(tmp_path)
     app = build_app(jobs_root=tmp_path)
     client = TestClient(app, root_path="/blink")
 
@@ -203,7 +234,7 @@ def test_dashboard_results_pages_honor_proxy_root_path(tmp_path: Path) -> None:
 
 
 def test_dashboard_results_pages_honor_configured_base_path(tmp_path: Path) -> None:
-    _, run_id = _setup_job_with_data(tmp_path)
+    _, run_id, _ = _setup_job_with_data(tmp_path)
     app = build_app(jobs_root=tmp_path, route_base_path="/blink")
     client = TestClient(app)
 

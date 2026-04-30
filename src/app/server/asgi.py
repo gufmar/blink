@@ -279,13 +279,19 @@ def _build_structure_tree_payload(
     run_id: int,
     page_rows: list[Any],
     details_url: str,
+    failed_counts_by_url: dict[str, int] | None = None,
+    ignored_counts_by_url: dict[str, int] | None = None,
 ) -> dict[str, Any]:
+    failed_counts_by_url = failed_counts_by_url or {}
+    ignored_counts_by_url = ignored_counts_by_url or {}
     root: dict[str, Any] = {
         "id": "/",
         "name": "/",
         "full_path": "/",
         "url": "/",
         "external_count": 0,
+        "failed_count": 0,
+        "ignored_count": 0,
         "ok": True,
         "details_url": details_url,
         "children": [],
@@ -312,6 +318,8 @@ def _build_structure_tree_payload(
                     "full_path": full_path,
                     "url": None,
                     "external_count": 0,
+                    "failed_count": 0,
+                    "ignored_count": 0,
                     "ok": True,
                     "details_url": "",
                     "children": [],
@@ -325,6 +333,8 @@ def _build_structure_tree_payload(
         leaf["url"] = page_url
         leaf["details_url"] = details_url
         leaf["external_count"] = int(getattr(row, "external_count", 0) or 0)
+        leaf["failed_count"] = int(failed_counts_by_url.get(page_url, 0))
+        leaf["ignored_count"] = int(ignored_counts_by_url.get(page_url, 0))
         leaf["ok"] = bool(getattr(row, "ok", False))
         leaf_count += 1
 
@@ -336,6 +346,8 @@ def _build_structure_tree_payload(
         for child in children:
             subtotal += rollup(child)
         node["external_count"] = subtotal
+        node["failed_count"] = int(node.get("failed_count") or 0) + sum(int(child.get("failed_count") or 0) for child in children)
+        node["ignored_count"] = int(node.get("ignored_count") or 0) + sum(int(child.get("ignored_count") or 0) for child in children)
         return subtotal
 
     rollup(root)
@@ -347,6 +359,37 @@ def _build_structure_tree_payload(
         "leaf_count": leaf_count,
         "nodes": root,
     }
+
+
+def _resolve_structure_runs(
+    repo: CrawlRepository,
+    *,
+    job_id: str,
+    run_id: int,
+    task_type: str,
+    link_check_run_id_query: int | None,
+) -> tuple[int, int | None]:
+    selected_crawl_run_id: int
+    selected_link_check_run_id: int | None = None
+    if link_check_run_id_query is not None:
+        selected_link_check = repo.get_link_check_run(link_check_run_id_query)
+        if selected_link_check is None or selected_link_check.job_id != job_id:
+            raise LookupError("run_not_found")
+        selected_crawl_run_id = int(selected_link_check.based_on_crawl_run_id)
+        selected_link_check_run_id = int(selected_link_check.run_id)
+        return selected_crawl_run_id, selected_link_check_run_id
+    if task_type == "link_check":
+        selected_link_check = repo.get_link_check_run(run_id)
+        if selected_link_check is None or selected_link_check.job_id != job_id:
+            raise LookupError("run_not_found")
+        selected_crawl_run_id = int(selected_link_check.based_on_crawl_run_id)
+        selected_link_check_run_id = int(selected_link_check.run_id)
+    else:
+        selected_crawl = repo.get_run_record(job_id=job_id, run_id=run_id)
+        if selected_crawl is None:
+            raise LookupError("run_not_found")
+        selected_crawl_run_id = int(selected_crawl.run_id)
+    return selected_crawl_run_id, selected_link_check_run_id
 
 
 async def schedule_dashboard(request: Request) -> HTMLResponse:
@@ -690,6 +733,11 @@ async def api_results_run_structure(request: Request) -> JSONResponse:
     jobs_root: Path = request.app.state.jobs_root
     job_id = str(request.path_params["job_id"])
     run_id = int(request.path_params["run_id"])
+    task_type = str(request.query_params.get("task_type") or "crawl").strip().lower()
+    if task_type not in {"crawl", "link_check"}:
+        task_type = "crawl"
+    link_check_run_id_raw = str(request.query_params.get("link_check_run_id") or "").strip()
+    link_check_run_id_query = int(link_check_run_id_raw) if link_check_run_id_raw.isdigit() else None
     job = _job_entry_by_id(jobs_root, job_id)
     if job is None:
         return _json_error(404, "job_not_found")
@@ -698,12 +746,48 @@ async def api_results_run_structure(request: Request) -> JSONResponse:
         return _json_error(404, "run_not_found")
     repo, _ = repo_and_conn
     try:
-        run = repo.get_run_record(job_id=job_id, run_id=run_id)
-        if run is None:
+        try:
+            selected_crawl_run_id, selected_link_check_run_id = _resolve_structure_runs(
+                repo,
+                job_id=job_id,
+                run_id=run_id,
+                task_type=task_type,
+                link_check_run_id_query=link_check_run_id_query,
+            )
+        except LookupError:
             return _json_error(404, "run_not_found")
-        page_rows = repo.list_page_external_link_counts(run_id, limit=10_000)
-        details_url = f"{_path_for(request, 'dashboard_results_run', job_id=job_id, run_id=run_id)}?task_type=crawl"
-        payload = _build_structure_tree_payload(job_id=job_id, run_id=run_id, page_rows=page_rows, details_url=details_url)
+        page_rows = repo.list_page_external_link_counts(selected_crawl_run_id, limit=10_000)
+        failed_rows = repo.list_latest_failed_link_check_results(
+            selected_crawl_run_id,
+            link_check_run_id=selected_link_check_run_id,
+            limit=4000,
+        )
+        active_failed_rows, ignored_failed_rows = _split_failed_and_ignored_link_results(failed_rows)
+        failed_targets = [row.target_url for row in active_failed_rows]
+        ignored_targets = [row.target_url for row in ignored_failed_rows]
+        failed_refs = repo.list_source_page_refs_for_targets(selected_crawl_run_id, failed_targets)
+        ignored_refs = repo.list_source_page_refs_for_targets(selected_crawl_run_id, ignored_targets)
+        failed_counts_by_url: dict[str, int] = {}
+        ignored_counts_by_url: dict[str, int] = {}
+        for records in failed_refs.values():
+            for ref in records:
+                failed_counts_by_url[ref.source_page_url] = failed_counts_by_url.get(ref.source_page_url, 0) + 1
+        for records in ignored_refs.values():
+            for ref in records:
+                ignored_counts_by_url[ref.source_page_url] = ignored_counts_by_url.get(ref.source_page_url, 0) + 1
+        details_url = (
+            f"{_path_for(request, 'dashboard_results_run', job_id=job_id, run_id=selected_crawl_run_id)}"
+            "?task_type=crawl"
+        )
+        payload = _build_structure_tree_payload(
+            job_id=job_id,
+            run_id=selected_crawl_run_id,
+            page_rows=page_rows,
+            details_url=details_url,
+            failed_counts_by_url=failed_counts_by_url,
+            ignored_counts_by_url=ignored_counts_by_url,
+        )
+        payload["selected_link_check_run_id"] = selected_link_check_run_id
         return JSONResponse(payload)
     finally:
         _close_repo(repo_and_conn)
@@ -1017,7 +1101,10 @@ async def dashboard_results_run(request: Request) -> HTMLResponse:
                 include_status_q=include_status,
                 include_category_q=include_category,
             ),
-            "structure": _path_for(request, "dashboard_results_structure", job_id=job_id, run_id=run_id),
+            "structure": (
+                f"{_path_for(request, 'dashboard_results_structure', job_id=job_id, run_id=run_id)}?task_type={task_type}"
+                + (f"&link_check_run_id={selected_link_check_run_id}" if selected_link_check_run_id is not None else "")
+            ),
             "jobs_index": _path_for(request, "dashboard_results_job_history", job_id=job_id),
             "refresh": with_filters(
                 base_run_path,
@@ -1034,6 +1121,11 @@ async def dashboard_results_structure(request: Request) -> HTMLResponse:
     jobs_root: Path = request.app.state.jobs_root
     job_id = str(request.path_params["job_id"])
     run_id = int(request.path_params["run_id"])
+    task_type = str(request.query_params.get("task_type") or "crawl").strip().lower()
+    if task_type not in {"crawl", "link_check"}:
+        task_type = "crawl"
+    link_check_run_id_raw = str(request.query_params.get("link_check_run_id") or "").strip()
+    link_check_run_id_query = int(link_check_run_id_raw) if link_check_run_id_raw.isdigit() else None
     job = _job_entry_by_id(jobs_root, job_id)
     if job is None:
         return HTMLResponse("Job not found", status_code=404)
@@ -1042,23 +1134,60 @@ async def dashboard_results_structure(request: Request) -> HTMLResponse:
         return HTMLResponse("Run not found", status_code=404)
     repo, _ = repo_and_conn
     try:
-        run = repo.get_run_record(job_id=job_id, run_id=run_id)
+        try:
+            selected_crawl_run_id, selected_link_check_run_id = _resolve_structure_runs(
+                repo,
+                job_id=job_id,
+                run_id=run_id,
+                task_type=task_type,
+                link_check_run_id_query=link_check_run_id_query,
+            )
+        except LookupError:
+            return HTMLResponse("Run not found", status_code=404)
+        run = repo.get_run_record(job_id=job_id, run_id=selected_crawl_run_id)
         if run is None:
             return HTMLResponse("Run not found", status_code=404)
-        page_rows = repo.list_page_external_link_counts(run_id, limit=10_000)
+        page_rows = repo.list_page_external_link_counts(selected_crawl_run_id, limit=10_000)
+        failed_rows = repo.list_latest_failed_link_check_results(
+            selected_crawl_run_id,
+            link_check_run_id=selected_link_check_run_id,
+            limit=4000,
+        )
+        active_failed_rows, ignored_failed_rows = _split_failed_and_ignored_link_results(failed_rows)
+        failed_targets = [row.target_url for row in active_failed_rows]
+        ignored_targets = [row.target_url for row in ignored_failed_rows]
+        failed_refs = repo.list_source_page_refs_for_targets(selected_crawl_run_id, failed_targets)
+        ignored_refs = repo.list_source_page_refs_for_targets(selected_crawl_run_id, ignored_targets)
+        failed_counts_by_url: dict[str, int] = {}
+        ignored_counts_by_url: dict[str, int] = {}
+        for records in failed_refs.values():
+            for ref in records:
+                failed_counts_by_url[ref.source_page_url] = failed_counts_by_url.get(ref.source_page_url, 0) + 1
+        for records in ignored_refs.values():
+            for ref in records:
+                ignored_counts_by_url[ref.source_page_url] = ignored_counts_by_url.get(ref.source_page_url, 0) + 1
+        link_check_options = [
+            {"run_id": row.run_id, "started_at": row.started_at}
+            for row in repo.list_link_check_run_history(job_id, limit=300)
+            if int(row.based_on_crawl_run_id) == int(selected_crawl_run_id)
+        ]
     finally:
         _close_repo(repo_and_conn)
-    run_page_url = f"{_path_for(request, 'dashboard_results_run', job_id=job_id, run_id=run_id)}?task_type=crawl"
+    run_page_url = f"{_path_for(request, 'dashboard_results_run', job_id=job_id, run_id=selected_crawl_run_id)}?task_type=crawl"
     structure_payload = _build_structure_tree_payload(
         job_id=job_id,
-        run_id=run_id,
+        run_id=selected_crawl_run_id,
         page_rows=page_rows,
         details_url=run_page_url,
+        failed_counts_by_url=failed_counts_by_url,
+        ignored_counts_by_url=ignored_counts_by_url,
     )
+    structure_payload["selected_link_check_run_id"] = selected_link_check_run_id
+    structure_payload["task_type"] = task_type
     page = render_results_structure_html(
         job=job,
         run={
-            "run_id": run_id,
+            "run_id": selected_crawl_run_id,
             "started_at": run.started_at,
             "finished_at": run.finished_at,
         },
@@ -1066,9 +1195,17 @@ async def dashboard_results_structure(request: Request) -> HTMLResponse:
         links={
             "main_dashboard": _path_for(request, "dashboard_schedule"),
             "run": run_page_url,
-            "structure_json": _path_for(request, "api_results_run_structure", job_id=job_id, run_id=run_id),
+            "structure_json": (
+                f"{_path_for(request, 'api_results_run_structure', job_id=job_id, run_id=run_id)}?task_type={task_type}"
+                + (f"&link_check_run_id={selected_link_check_run_id}" if selected_link_check_run_id is not None else "")
+            ),
             "jobs_index": _path_for(request, "dashboard_results_job_history", job_id=job_id),
-            "refresh": _path_for(request, "dashboard_results_structure", job_id=job_id, run_id=run_id),
+            "refresh": (
+                f"{_path_for(request, 'dashboard_results_structure', job_id=job_id, run_id=run_id)}?task_type={task_type}"
+                + (f"&link_check_run_id={selected_link_check_run_id}" if selected_link_check_run_id is not None else "")
+            ),
+            "link_check_options": link_check_options,
+            "selected_link_check_id": selected_link_check_run_id,
             **_branding_links(request),
         },
     )

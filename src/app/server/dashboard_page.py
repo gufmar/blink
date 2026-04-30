@@ -649,7 +649,22 @@ def render_results_structure_html(
     links: dict[str, str],
 ) -> str:
     """Render radial tidy tree structure view for one crawl run."""
-    tree_json = esc(json.dumps(tree_payload, separators=(",", ":"), ensure_ascii=True))
+    tree_json_raw = json.dumps(tree_payload, separators=(",", ":"), ensure_ascii=True)
+    link_check_options: list[dict[str, Any]] = list(links.get("link_check_options") or [])
+    selected_link_check_id = links.get("selected_link_check_id")
+    selector_html = ""
+    if link_check_options:
+        options = ['<option value="">latest per target (all link-check runs)</option>']
+        for option in link_check_options:
+            run_id = int(option.get("run_id") or 0)
+            selected = " selected" if selected_link_check_id is not None and int(selected_link_check_id) == run_id else ""
+            started = esc(option.get("started_at") or "—")
+            options.append(f'<option value="{run_id}"{selected}>run {run_id} · {started}</option>')
+        selector_html = (
+            '<label>Link-check run'
+            f'<select id="linkCheckRun">{"".join(options)}</select>'
+            "</label>"
+        )
     return _render_results_shell(
         title=f"Blink structure · {esc(job.get('job_id', ''))} run {esc(run.get('run_id', ''))}",
         heading=f"Structure · {esc(job.get('job_id', ''))}",
@@ -679,9 +694,12 @@ def render_results_structure_html(
     <label>Size by
       <select id="sizeBy">
         <option value="external_count" selected>external links</option>
+        <option value="failed_count">failed links</option>
+        <option value="ignored_count">ignored links</option>
         <option value="fixed">fixed</option>
       </select>
     </label>
+    {selector_html}
   </div>
   <div id="radial-tree" style="width: 100%; overflow: auto; padding: 0 0.5rem 1rem 0.5rem;"></div>
   <div id="node-popover" class="panel" style="margin: 0.75rem 1rem 1rem 1rem; display: none;">
@@ -689,15 +707,18 @@ def render_results_structure_html(
     <div id="node-popover-content" style="padding: 0.75rem 1rem;"></div>
   </div>
 </section>
+<script id="structure-payload" type="application/json">{tree_json_raw}</script>
 <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
 <script>
 (() => {{
-  const payload = JSON.parse("{tree_json}");
+  const payloadEl = document.getElementById("structure-payload");
+  const payload = JSON.parse(payloadEl ? payloadEl.textContent : "{{}}");
   const host = document.getElementById("radial-tree");
   const popover = document.getElementById("node-popover");
   const popoverContent = document.getElementById("node-popover-content");
   const colorBy = document.getElementById("colorBy");
   const sizeBy = document.getElementById("sizeBy");
+  const linkCheckRun = document.getElementById("linkCheckRun");
   const width = 1000;
   const radius = width / 2;
 
@@ -712,9 +733,12 @@ def render_results_structure_html(
     const root = d3.hierarchy(payload.nodes);
     d3.tree().size([2 * Math.PI, radius - 120])(root);
     const allNodes = flatten(payload.nodes);
-    const maxExternal = Math.max(1, ...allNodes.map((n) => n.external_count || 0));
-    const colorScale = d3.scaleSequential([0, maxExternal], d3.interpolateBlues);
-    const sizeScale = d3.scaleSqrt().domain([0, maxExternal]).range([2.5, 8]);
+    const key = colorBy.value || "external_count";
+    const keyForSize = sizeBy.value || "external_count";
+    const maxMetric = Math.max(1, ...allNodes.map((n) => n[key] || 0));
+    const maxSizeMetric = Math.max(1, ...allNodes.map((n) => n[keyForSize] || 0));
+    const colorScale = d3.scaleSequential([0, maxMetric], d3.interpolateBlues);
+    const sizeScale = d3.scaleSqrt().domain([0, maxSizeMetric]).range([2.5, 8]);
 
     const svg = d3.create("svg")
       .attr("viewBox", [-radius, -radius, width, width])
@@ -738,8 +762,8 @@ def render_results_structure_html(
       .attr("transform", (d) => `rotate(${{(d.x * 180 / Math.PI) - 90}}) translate(${{d.y}},0)`);
 
     node.append("circle")
-      .attr("r", (d) => sizeBy.value === "fixed" ? 4 : sizeScale(d.data.external_count || 0))
-      .attr("fill", (d) => colorScale(d.data.external_count || 0))
+      .attr("r", (d) => sizeBy.value === "fixed" ? 4 : sizeScale(d.data[keyForSize] || 0))
+      .attr("fill", (d) => colorScale(d.data[key] || 0))
       .attr("stroke", "#1e293b")
       .attr("stroke-width", 0.6)
       .style("cursor", "pointer")
@@ -749,6 +773,8 @@ def render_results_structure_html(
         popoverContent.innerHTML = `
           <div><strong>Path:</strong> <span class="mono">${{url}}</span></div>
           <div><strong>External links:</strong> <span class="mono">${{d.data.external_count || 0}}</span></div>
+          <div><strong>Failed links:</strong> <span class="mono">${{d.data.failed_count || 0}}</span></div>
+          <div><strong>Ignored links:</strong> <span class="mono">${{d.data.ignored_count || 0}}</span></div>
           <div><strong>Status:</strong> <span class="mono">${{d.data.ok === false ? "failed" : "ok"}}</span></div>
           <div style="margin-top: 0.4rem;">${{detailsLink}}</div>
         `;
@@ -769,6 +795,18 @@ def render_results_structure_html(
 
   colorBy.addEventListener("change", render);
   sizeBy.addEventListener("change", render);
+  if (linkCheckRun) {{
+    linkCheckRun.addEventListener("change", () => {{
+      const selected = linkCheckRun.value;
+      const url = new URL(window.location.href);
+      if (selected) {{
+        url.searchParams.set("link_check_run_id", selected);
+      }} else {{
+        url.searchParams.delete("link_check_run_id");
+      }}
+      window.location.href = url.toString();
+    }});
+  }}
   render();
 }})();
 </script>
