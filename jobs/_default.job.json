@@ -140,7 +140,33 @@
     "playwright": {
       "navigation_timeout_seconds": 10,
       "network_idle_seconds": 4,
-      "settle_wait_seconds": 2
+      "settle_wait_seconds": 2,
+      "wait_until": "commit",
+      "accept_partial_success_on_navigation_timeout": true
+    },
+    "preflight": {
+      "enabled": true,
+      "skip_playwright_content_types": [
+        "application/zip",
+        "application/x-zip-compressed",
+        "application/octet-stream",
+        "application/pdf",
+        "application/x-tar",
+        "application/gzip"
+      ],
+      "skip_playwright_path_extensions": [
+        ".zip",
+        ".pdf",
+        ".tar",
+        ".gz",
+        ".tgz"
+      ]
+    },
+    "hybrid": {
+      "retry_playwright_http_status": [403, 429, 503],
+      "retry_playwright_on_connection_error": false,
+      "run_playwright_when_preflight_html": true,
+      "run_playwright_when_http_ok_unknown_type": false
     },
     "write_json_report": true,
     "save_failure_screenshot": true,

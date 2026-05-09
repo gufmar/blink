@@ -116,6 +116,7 @@ class LinkCheckResultRecord:
     decision_state: str | None = None
     ignore_rule_id: int | None = None
     decision_reason: str | None = None
+    check_meta: str | None = None
 
 
 @dataclass(frozen=True)
@@ -469,6 +470,7 @@ class CrawlRepository:
         decision_state: str | None = None,
         ignore_rule_id: int | None = None,
         decision_reason: str | None = None,
+        check_meta: str | None = None,
     ) -> int:
         cursor = self._connection.execute(
             """
@@ -480,11 +482,12 @@ class CrawlRepository:
                 status_code,
                 ok,
                 error_message,
+                check_meta,
                 error_category,
                 decision_state,
                 ignore_rule_id,
                 decision_reason
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 crawl_link_id,
@@ -494,6 +497,7 @@ class CrawlRepository:
                 status_code,
                 int(ok),
                 error_message,
+                check_meta,
                 error_category,
                 decision_state,
                 ignore_rule_id,
@@ -598,6 +602,7 @@ class CrawlRepository:
                 l.status_code,
                 l.ok,
                 l.error_message,
+                l.check_meta,
                 l.checked_at,
                 l.error_category,
                 l.decision_state,
@@ -627,6 +632,7 @@ class CrawlRepository:
                     decision_state=str(row["decision_state"]) if row["decision_state"] is not None else None,
                     ignore_rule_id=int(row["ignore_rule_id"]) if row["ignore_rule_id"] is not None else None,
                     decision_reason=str(row["decision_reason"]) if row["decision_reason"] is not None else None,
+                    check_meta=str(row["check_meta"]) if row["check_meta"] is not None else None,
                 )
                 for row in rows
             ]
@@ -641,6 +647,7 @@ class CrawlRepository:
                 l.status_code,
                 l.ok,
                 l.error_message,
+                l.check_meta,
                 l.checked_at,
                 l.error_category,
                 l.decision_state,
@@ -676,6 +683,7 @@ class CrawlRepository:
                 decision_state=str(row["decision_state"]) if row["decision_state"] is not None else None,
                 ignore_rule_id=int(row["ignore_rule_id"]) if row["ignore_rule_id"] is not None else None,
                 decision_reason=str(row["decision_reason"]) if row["decision_reason"] is not None else None,
+                check_meta=str(row["check_meta"]) if row["check_meta"] is not None else None,
             )
             for row in rows
         ]
@@ -698,6 +706,7 @@ class CrawlRepository:
                     l.status_code,
                     l.ok,
                     l.error_message,
+                    l.check_meta,
                     l.checked_at,
                     l.error_category,
                     l.decision_state,
@@ -726,6 +735,7 @@ class CrawlRepository:
                     decision_state=str(row["decision_state"]) if row["decision_state"] is not None else None,
                     ignore_rule_id=int(row["ignore_rule_id"]) if row["ignore_rule_id"] is not None else None,
                     decision_reason=str(row["decision_reason"]) if row["decision_reason"] is not None else None,
+                    check_meta=str(row["check_meta"]) if row["check_meta"] is not None else None,
                 )
                 for row in rows
             ]
@@ -741,6 +751,7 @@ class CrawlRepository:
                 l.status_code,
                 l.ok,
                 l.error_message,
+                l.check_meta,
                 l.checked_at,
                 l.error_category,
                 l.decision_state,
@@ -775,6 +786,7 @@ class CrawlRepository:
                 decision_state=str(row["decision_state"]) if row["decision_state"] is not None else None,
                 ignore_rule_id=int(row["ignore_rule_id"]) if row["ignore_rule_id"] is not None else None,
                 decision_reason=str(row["decision_reason"]) if row["decision_reason"] is not None else None,
+                check_meta=str(row["check_meta"]) if row["check_meta"] is not None else None,
             )
             for row in rows
         ]

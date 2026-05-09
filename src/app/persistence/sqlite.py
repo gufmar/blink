@@ -69,6 +69,7 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
             status_code INTEGER,
             ok INTEGER NOT NULL,
             error_message TEXT,
+            check_meta TEXT,
             error_category TEXT,
             decision_state TEXT,
             ignore_rule_id INTEGER,
@@ -345,6 +346,7 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
     )
     _ensure_run_pages_text_metric_columns(connection)
     _ensure_link_check_result_decision_columns(connection)
+    _ensure_link_check_results_check_meta_column(connection)
     _ensure_link_check_run_columns(connection)
     _ensure_link_alerts_lifecycle_columns(connection)
     _ensure_link_alert_events_table(connection)
@@ -386,6 +388,13 @@ def _ensure_link_check_result_decision_columns(connection: sqlite3.Connection) -
         statements.append("ALTER TABLE link_check_results ADD COLUMN link_check_run_id INTEGER")
     for stmt in statements:
         connection.execute(stmt)
+
+
+def _ensure_link_check_results_check_meta_column(connection: sqlite3.Connection) -> None:
+    rows = connection.execute("PRAGMA table_info(link_check_results)").fetchall()
+    names = {str(r[1]) for r in rows}
+    if "check_meta" not in names:
+        connection.execute("ALTER TABLE link_check_results ADD COLUMN check_meta TEXT")
 
 
 def _ensure_link_check_run_columns(connection: sqlite3.Connection) -> None:

@@ -44,6 +44,8 @@ def test_link_check_run_writes_json_report_when_enabled(tmp_path, monkeypatch) -
             *,
             artifacts_dir=None,  # noqa: ANN001
             save_failure_screenshot: bool = False,
+            user_agent: str | None = None,  # noqa: ARG002
+            **_kwargs: object,
         ) -> None:
             self._timeout_seconds = timeout_seconds
             self._follow_redirects = follow_redirects
@@ -134,6 +136,8 @@ def test_link_check_run_prints_source_pages_for_live_failures(tmp_path, monkeypa
             *,
             artifacts_dir=None,  # noqa: ANN001
             save_failure_screenshot: bool = False,
+            user_agent: str | None = None,  # noqa: ARG002
+            **_kwargs: object,
         ) -> None:
             self._timeout_seconds = timeout_seconds
             self._follow_redirects = follow_redirects
@@ -214,6 +218,8 @@ def test_link_check_run_max_blinks_reports_new_across_runs(tmp_path, monkeypatch
             *,
             artifacts_dir=None,  # noqa: ANN001
             save_failure_screenshot: bool = False,
+            user_agent: str | None = None,  # noqa: ARG002
+            **_kwargs: object,
         ) -> None:
             self._timeout_seconds = timeout_seconds
             self._follow_redirects = follow_redirects

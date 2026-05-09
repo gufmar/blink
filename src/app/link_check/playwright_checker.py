@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from app.link_check.http_client import HttpCheckResult
 from app.render.playwright_client import BrowserSettings
+
+WaitUntil = Literal["commit", "domcontentloaded"]
 
 
 @dataclass(frozen=True)
@@ -17,6 +20,8 @@ class PlaywrightLinkCheckerConfig:
     navigation_timeout_seconds: int
     network_idle_seconds: int
     settle_wait_seconds: int
+    wait_until: WaitUntil
+    accept_partial_success_on_navigation_timeout: bool
     artifacts_dir: Path | None = None
     save_failure_screenshot: bool = False
 
@@ -35,6 +40,8 @@ class PlaywrightLinkChecker:
         self._navigation_timeout_ms = max(1000, int(config.navigation_timeout_seconds) * 1000)
         self._network_idle_timeout_ms = max(0, int(config.network_idle_seconds) * 1000)
         self._settle_wait_timeout_ms = max(0, int(config.settle_wait_seconds) * 1000)
+        self._wait_until: WaitUntil = config.wait_until
+        self._accept_partial = config.accept_partial_success_on_navigation_timeout
         self._blocked_netloc_contains = [value.lower() for value in browser_settings.block_request_netloc_contains]
         self._playwright: Any = None
         self._browser: Any = None
@@ -114,6 +121,10 @@ class PlaywrightLinkChecker:
             return f"{base} - Vercel challenge"
         return base
 
+    def _meta(self, **kwargs: Any) -> str:
+        payload = {"stage": "playwright", **kwargs}
+        return json.dumps(payload, sort_keys=True)
+
     def _capture_failure_screenshot(self, page: Any, url: str) -> str | None:
         artifacts_dir = self._config.artifacts_dir
         if not self._config.save_failure_screenshot or artifacts_dir is None:
@@ -141,11 +152,29 @@ class PlaywrightLinkChecker:
             if self._should_block_request(route.request.url)
             else route.continue_(),
         )
+        document_responses: list[tuple[int, dict[str, str]]] = []
+
+        def on_response(response: Any) -> None:
+            try:
+                if response.request.resource_type != "document":
+                    return
+                status = int(response.status)
+                headers = {k.lower(): v for k, v in response.headers.items()}
+                document_responses.append((status, headers))
+            except Exception:  # noqa: BLE001
+                return
+
+        page.on("response", on_response)
         status_code: int | None = None
         fallback_error: str | None = None
         response_headers: dict[str, str] = {}
+        partial_timeout_recovery = False
         try:
-            response = page.goto(url, timeout=self._navigation_timeout_ms, wait_until="domcontentloaded")
+            response = page.goto(
+                url,
+                timeout=self._navigation_timeout_ms,
+                wait_until=self._wait_until,
+            )
             if response is not None:
                 status_code = response.status
                 response_headers = {k.lower(): v for k, v in response.headers.items()}
@@ -158,6 +187,20 @@ class PlaywrightLinkChecker:
                 page.wait_for_timeout(self._settle_wait_timeout_ms)
         except Exception as exc:  # noqa: BLE001
             fallback_error = str(exc)
+            err_lower = fallback_error.lower()
+            timed_out = "timeout" in err_lower or "timed out" in err_lower
+            if (
+                self._accept_partial
+                and timed_out
+                and document_responses
+                and status_code is None
+            ):
+                last_status, last_headers = document_responses[-1]
+                if 200 <= last_status < 400:
+                    status_code = last_status
+                    response_headers = last_headers
+                    partial_timeout_recovery = True
+                    fallback_error = None
         finally:
             ok = status_code is not None and 200 <= status_code < 400
             screenshot_file = None
@@ -169,9 +212,15 @@ class PlaywrightLinkChecker:
                 fallback_error=fallback_error,
             )
             page.close()
+
+        check_meta = self._meta(
+            wait_until=self._wait_until,
+            partial_timeout_recovery=partial_timeout_recovery,
+        )
         return HttpCheckResult(
             status_code=status_code,
             ok=ok,
             error_message=error_message,
             screenshot_file=screenshot_file,
+            check_meta=check_meta,
         )

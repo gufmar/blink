@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,6 +17,11 @@ class HttpCheckResult:
     ok: bool
     error_message: str | None
     screenshot_file: str | None = None
+    check_meta: str | None = None
+
+
+def _http_check_meta() -> str:
+    return json.dumps({"method": "urllib", "stage": "http"}, sort_keys=True)
 
 
 class _NoRedirectHandler(HTTPRedirectHandler):
@@ -33,12 +39,14 @@ class HttpLinkChecker:
         *,
         artifacts_dir: Path | None = None,
         save_failure_screenshot: bool = False,
+        user_agent: str | None = None,
     ) -> None:
         handlers = [] if follow_redirects else [_NoRedirectHandler()]
         self._opener = build_opener(*handlers)
         self._timeout_seconds = timeout_seconds
         self._artifacts_dir = artifacts_dir
         self._save_failure_screenshot = save_failure_screenshot
+        self._user_agent = user_agent or "Blink/3.0 LinkCheck"
 
     def _format_http_error(self, exc: HTTPError) -> str:
         status_code = int(exc.code)
@@ -82,7 +90,7 @@ class HttpLinkChecker:
             return None
 
     def check(self, url: str) -> HttpCheckResult:
-        request = Request(url=url, headers={"User-Agent": "Blink/3.0 LinkCheck"})
+        request = Request(url=url, headers={"User-Agent": self._user_agent})
         try:
             with self._opener.open(request, timeout=self._timeout_seconds) as response:
                 status_code = int(response.getcode())
@@ -94,6 +102,7 @@ class HttpLinkChecker:
                     ok=200 <= status_code < 400,
                     error_message=None,
                     screenshot_file=screenshot_file,
+                    check_meta=_http_check_meta(),
                 )
         except HTTPError as exc:
             status_code = int(exc.code)
@@ -103,6 +112,7 @@ class HttpLinkChecker:
                 ok=200 <= status_code < 400,
                 error_message=self._format_http_error(exc),
                 screenshot_file=screenshot_file,
+                check_meta=_http_check_meta(),
             )
         except URLError as exc:
             return HttpCheckResult(
@@ -110,6 +120,7 @@ class HttpLinkChecker:
                 ok=False,
                 error_message=str(exc),
                 screenshot_file=self._capture_failure_screenshot(url),
+                check_meta=_http_check_meta(),
             )
         except Exception as exc:  # noqa: BLE001
             return HttpCheckResult(
@@ -117,4 +128,5 @@ class HttpLinkChecker:
                 ok=False,
                 error_message=str(exc),
                 screenshot_file=self._capture_failure_screenshot(url),
+                check_meta=_http_check_meta(),
             )

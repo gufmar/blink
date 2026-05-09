@@ -214,6 +214,8 @@
         "target_url_policy",
         "follow_redirects",
         "playwright",
+        "preflight",
+        "hybrid",
         "write_json_report",
         "save_failure_screenshot",
         "tolerance"
@@ -222,7 +224,7 @@
         "enabled": { "type": "boolean" },
         "implementation": {
           "type": "string",
-          "enum": ["playwright", "http"],
+          "enum": ["playwright", "http", "http_then_playwright"],
           "default": "playwright"
         },
         "request_timeout_seconds": { "type": "integer", "minimum": 1 },
@@ -234,20 +236,9 @@
         "ignore": { "$ref": "#/$defs/linkCheckIgnore" },
         "target_url_policy": { "$ref": "#/$defs/linkCheckTargetUrlPolicy" },
         "follow_redirects": { "type": "boolean" },
-        "playwright": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "navigation_timeout_seconds",
-            "network_idle_seconds",
-            "settle_wait_seconds"
-          ],
-          "properties": {
-            "navigation_timeout_seconds": { "type": "integer", "minimum": 1 },
-            "network_idle_seconds": { "type": "integer", "minimum": 0 },
-            "settle_wait_seconds": { "type": "integer", "minimum": 0 }
-          }
-        },
+        "playwright": { "$ref": "#/$defs/linkCheckPlaywright" },
+        "preflight": { "$ref": "#/$defs/linkCheckPreflight" },
+        "hybrid": { "$ref": "#/$defs/linkCheckHybrid" },
         "write_json_report": { "type": "boolean", "default": false },
         "save_failure_screenshot": { "type": "boolean", "default": true },
         "tolerance": {
@@ -402,6 +393,82 @@
           "properties": {
             "store_raw_href": { "type": "boolean" }
           }
+        }
+      }
+    },
+    "linkCheckPlaywright": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "navigation_timeout_seconds",
+        "network_idle_seconds",
+        "settle_wait_seconds",
+        "wait_until",
+        "accept_partial_success_on_navigation_timeout"
+      ],
+      "properties": {
+        "navigation_timeout_seconds": { "type": "integer", "minimum": 1 },
+        "network_idle_seconds": { "type": "integer", "minimum": 0 },
+        "settle_wait_seconds": { "type": "integer", "minimum": 0 },
+        "wait_until": {
+          "type": "string",
+          "enum": ["commit", "domcontentloaded"],
+          "default": "commit"
+        },
+        "accept_partial_success_on_navigation_timeout": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "linkCheckPreflight": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "skip_playwright_content_types",
+        "skip_playwright_path_extensions"
+      ],
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "skip_playwright_content_types": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": []
+        },
+        "skip_playwright_path_extensions": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^\\." },
+          "default": []
+        }
+      }
+    },
+    "linkCheckHybrid": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "retry_playwright_http_status",
+        "retry_playwright_on_connection_error",
+        "run_playwright_when_preflight_html",
+        "run_playwright_when_http_ok_unknown_type"
+      ],
+      "properties": {
+        "retry_playwright_http_status": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 100, "maximum": 599 },
+          "default": [403, 429, 503]
+        },
+        "retry_playwright_on_connection_error": {
+          "type": "boolean",
+          "default": false
+        },
+        "run_playwright_when_preflight_html": {
+          "type": "boolean",
+          "default": true
+        },
+        "run_playwright_when_http_ok_unknown_type": {
+          "type": "boolean",
+          "default": false
         }
       }
     },

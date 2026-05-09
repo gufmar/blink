@@ -12,6 +12,7 @@ from rich.table import Table
 
 from app.config.loader import load_effective_job_config
 from app.config.schema import validate_job_config
+from app.link_check.composite_checkers import HttpThenPlaywrightChecker, PreflightAssetSkippingChecker
 from app.link_check.http_client import HttpCheckResult, HttpLinkChecker
 from app.link_check.playwright_checker import PlaywrightLinkChecker, PlaywrightLinkCheckerConfig
 from app.link_check.reporting import build_link_check_report, report_filename, write_link_check_report
@@ -59,27 +60,49 @@ def _browser_settings_from_config(config: JobConfig) -> BrowserSettings:
 
 def _build_link_checker(config: JobConfig, *, artifacts_dir: Path):
     implementation = str(config["link_check"]["implementation"]).strip().lower()
-    if implementation == "http":
-        return HttpLinkChecker(
-            timeout_seconds=config["link_check"]["request_timeout_seconds"],
-            follow_redirects=config["link_check"]["follow_redirects"],
-            artifacts_dir=artifacts_dir,
-            save_failure_screenshot=config["link_check"]["save_failure_screenshot"],
-        )
-    if implementation == "playwright":
-        if not config["link_check"]["follow_redirects"]:
-            event_logger("linkcheck.redirects").warning(
-                "link_check.follow_redirects=false is ignored for Playwright implementation."
-            )
+    lc = config["link_check"]
+    pw_cfg = lc["playwright"]
+
+    def _make_playwright_core() -> PlaywrightLinkChecker:
         return PlaywrightLinkChecker(
             browser_settings=_browser_settings_from_config(config),
             config=PlaywrightLinkCheckerConfig(
-                navigation_timeout_seconds=config["link_check"]["playwright"]["navigation_timeout_seconds"],
-                network_idle_seconds=config["link_check"]["playwright"]["network_idle_seconds"],
-                settle_wait_seconds=config["link_check"]["playwright"]["settle_wait_seconds"],
+                navigation_timeout_seconds=pw_cfg["navigation_timeout_seconds"],
+                network_idle_seconds=pw_cfg["network_idle_seconds"],
+                settle_wait_seconds=pw_cfg["settle_wait_seconds"],
+                wait_until=pw_cfg["wait_until"],
+                accept_partial_success_on_navigation_timeout=pw_cfg["accept_partial_success_on_navigation_timeout"],
                 artifacts_dir=artifacts_dir,
-                save_failure_screenshot=config["link_check"]["save_failure_screenshot"],
+                save_failure_screenshot=lc["save_failure_screenshot"],
             ),
+        )
+
+    if implementation == "http":
+        return HttpLinkChecker(
+            timeout_seconds=lc["request_timeout_seconds"],
+            follow_redirects=lc["follow_redirects"],
+            artifacts_dir=artifacts_dir,
+            save_failure_screenshot=lc["save_failure_screenshot"],
+            user_agent=config["crawl"]["user_agent"],
+        )
+    if implementation == "playwright":
+        if not lc["follow_redirects"]:
+            event_logger("linkcheck.redirects").warning(
+                "link_check.follow_redirects=false is ignored for Playwright implementation."
+            )
+        return PreflightAssetSkippingChecker(config=config, delegate=_make_playwright_core())
+    if implementation == "http_then_playwright":
+        http_checker = HttpLinkChecker(
+            timeout_seconds=lc["request_timeout_seconds"],
+            follow_redirects=lc["follow_redirects"],
+            artifacts_dir=artifacts_dir,
+            save_failure_screenshot=lc["save_failure_screenshot"],
+            user_agent=config["crawl"]["user_agent"],
+        )
+        return HttpThenPlaywrightChecker(
+            config=config,
+            http_checker=http_checker,
+            playwright_checker=_make_playwright_core(),
         )
     raise ValueError(f"Unsupported link_check.implementation: {implementation}")
 
@@ -599,6 +622,7 @@ def show(
             "source_anchor_texts": " | ".join(
                 [ref.anchor_text or "" for ref in source_refs_by_target.get(record.target_url, []) if ref.anchor_text]
             ),
+            "check_meta": record.check_meta or "",
         }
         for record in records
     ]

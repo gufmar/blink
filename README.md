@@ -93,8 +93,12 @@ URL behavior is split by concern:
 - `crawl.url_normalization.external.store_raw_href` preserves exact external hrefs for persistence/reporting.
 - `link_check.target_url_policy.request.keep_query|keep_fragment` controls the URL form used for outbound link-check requests.
 - `link_check.ignore.http_status` controls ignored HTTP status codes, and `link_check.ignore.url_schemes` controls ignored URL schemes (for example `mailto`) during link-check execution.
-- `link_check.implementation` selects checker runtime: `playwright` (default, browser-like behavior) or `http` (legacy urllib fallback).
-- `link_check.playwright.navigation_timeout_seconds|network_idle_seconds|settle_wait_seconds` tunes Playwright link-check timing.
+- `link_check.implementation`: `playwright` (default), `http` (urllib only), or `http_then_playwright` (HEAD/preflight + HTTP GET, then Playwright when HTML verification or retry rules apply).
+- `link_check.playwright.wait_until`: `commit` (default, fewer false timeouts on slow DOM) or `domcontentloaded`.
+- `link_check.playwright.accept_partial_success_on_navigation_timeout`: when `true` (default), if Playwright times out but the main document already returned HTTP 2xx, the link is treated as OK.
+- `link_check.playwright.navigation_timeout_seconds|network_idle_seconds|settle_wait_seconds` tunes timing.
+- `link_check.preflight`: optional HEAD/GET classification to skip Playwright for archives and other non-HTML responses (`skip_playwright_content_types`, `skip_playwright_path_extensions`).
+- `link_check.hybrid`: used by `http_then_playwright` — `retry_playwright_http_status` (e.g. 403/429/503), `retry_playwright_on_connection_error`, when to run Playwright after preflight sees HTML vs unknown `Content-Type`.
 
 Example:
 
@@ -104,12 +108,25 @@ Example:
   "playwright": {
     "navigation_timeout_seconds": 10,
     "network_idle_seconds": 4,
-    "settle_wait_seconds": 2
+    "settle_wait_seconds": 2,
+    "wait_until": "commit",
+    "accept_partial_success_on_navigation_timeout": true
+  },
+  "preflight": { "enabled": true, "skip_playwright_content_types": [], "skip_playwright_path_extensions": [] },
+  "hybrid": {
+    "retry_playwright_http_status": [403, 429, 503],
+    "retry_playwright_on_connection_error": false,
+    "run_playwright_when_preflight_html": true,
+    "run_playwright_when_http_ok_unknown_type": false
   }
 }
 ```
 
-`link_check.follow_redirects` only applies to `implementation: "http"`. Browser-based checks always follow redirects.
+`link_check.follow_redirects` applies to urllib-based steps (`http` implementation and preflight/HTTP parts of `http_then_playwright`). Pure Playwright navigation always follows redirects like a browser.
+
+Successful checks may store JSON in `check_meta` on each result (pipeline stage: `preflight`, `http`, `playwright`) for dashboards and JSON reports.
+
+With `http_then_playwright`, average time per URL can rise; increase `schedule.link_check.max_runtime_seconds` if scheduled runs hit the cap.
 
 Run crawl using default per-job DB path:
 

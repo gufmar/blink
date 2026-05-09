@@ -89,6 +89,7 @@ def build_link_check_report(
                     "target_url": row.target_url,
                     "status_code": row.status_code,
                     "error_message": row.error_message,
+                    "check_meta": row.check_meta,
                     "blinks": source_refs_by_target.get(row.target_url, []),
                     "screenshot_id": screenshot_by_result_id.get(row.row_id),
                     "error_category": row.error_category,
@@ -106,6 +107,7 @@ def build_link_check_report(
                 "target_url": row.target_url,
                 "status_code": row.status_code,
                 "error_message": row.error_message,
+                "check_meta": row.check_meta,
                 "blinks": source_refs_by_target.get(row.target_url, []),
                 "screenshot_id": screenshot_by_result_id.get(row.row_id),
             }

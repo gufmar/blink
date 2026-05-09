@@ -26,6 +26,9 @@ class _FakePage:
     def route(self, _pattern: str, _handler) -> None:  # noqa: ANN001
         return
 
+    def on(self, _event: str, _handler) -> None:  # noqa: ANN001
+        return
+
     def goto(self, _url: str, *, timeout: int, wait_until: str):  # noqa: ANN001
         _ = timeout
         _ = wait_until
@@ -75,6 +78,8 @@ def _checker_with_context(page: _FakePage) -> PlaywrightLinkChecker:
             navigation_timeout_seconds=5,
             network_idle_seconds=1,
             settle_wait_seconds=0,
+            wait_until="commit",
+            accept_partial_success_on_navigation_timeout=True,
             artifacts_dir=None,
             save_failure_screenshot=True,
         ),
@@ -119,3 +124,53 @@ def test_playwright_checker_handles_navigation_error() -> None:
     assert result.ok is False
     assert result.status_code is None
     assert "ERR_CONNECTION_REFUSED" in (result.error_message or "")
+
+
+class _FakeDocResponse:
+    def __init__(self, status: int) -> None:
+        self.status = status
+        self.headers = {}
+        self.request = type("Req", (), {"resource_type": "document"})()
+
+
+class _FakePageTimeoutPartial:
+    def __init__(self) -> None:
+        self.screenshot_calls = 0
+        self._response_handler = None
+
+    def route(self, _pattern: str, _handler) -> None:  # noqa: ANN001
+        return
+
+    def on(self, event: str, handler) -> None:  # noqa: ANN001
+        if event == "response":
+            self._response_handler = handler
+
+    def goto(self, _url: str, *, timeout: int, wait_until: str):  # noqa: ANN001
+        if self._response_handler is not None:
+            self._response_handler(_FakeDocResponse(200))
+        raise RuntimeError("Page.goto: Timeout 10000ms exceeded")
+
+    def wait_for_load_state(self, _state: str, *, timeout: int) -> None:  # noqa: ANN001
+        return
+
+    def wait_for_timeout(self, _timeout: int) -> None:
+        return
+
+    def screenshot(self, *, path: str, full_page: bool) -> None:
+        _ = path
+        _ = full_page
+        self.screenshot_calls += 1
+
+    def close(self) -> None:
+        return
+
+
+def test_playwright_checker_partial_success_on_navigation_timeout() -> None:
+    checker = _checker_with_context(_FakePageTimeoutPartial())
+    result = checker.check("https://slow.example")
+    assert result.ok is True
+    assert result.status_code == 200
+    assert result.error_message is None
+    assert result.screenshot_file is None
+    assert result.check_meta is not None
+    assert "partial_timeout_recovery" in result.check_meta

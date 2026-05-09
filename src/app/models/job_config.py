@@ -116,6 +116,21 @@ class LinkCheckPlaywrightConfig(TypedDict):
     navigation_timeout_seconds: int
     network_idle_seconds: int
     settle_wait_seconds: int
+    wait_until: Literal["commit", "domcontentloaded"]
+    accept_partial_success_on_navigation_timeout: bool
+
+
+class LinkCheckPreflightConfig(TypedDict):
+    enabled: bool
+    skip_playwright_content_types: list[str]
+    skip_playwright_path_extensions: list[str]
+
+
+class LinkCheckHybridConfig(TypedDict):
+    retry_playwright_http_status: list[int]
+    retry_playwright_on_connection_error: bool
+    run_playwright_when_preflight_html: bool
+    run_playwright_when_http_ok_unknown_type: bool
 
 
 class ContentConfig(TypedDict):
@@ -129,7 +144,7 @@ class ContentConfig(TypedDict):
 
 class LinkCheckConfig(TypedDict):
     enabled: bool
-    implementation: Literal["playwright", "http"]
+    implementation: Literal["playwright", "http", "http_then_playwright"]
     request_timeout_seconds: int
     retry_count: int
     consecutive_failures_before_alert: int
@@ -137,6 +152,8 @@ class LinkCheckConfig(TypedDict):
     target_url_policy: LinkCheckTargetUrlPolicyConfig
     follow_redirects: bool
     playwright: LinkCheckPlaywrightConfig
+    preflight: LinkCheckPreflightConfig
+    hybrid: LinkCheckHybridConfig
     write_json_report: bool
     save_failure_screenshot: bool
     tolerance: "LinkCheckToleranceConfig"

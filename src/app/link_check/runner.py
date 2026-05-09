@@ -284,6 +284,7 @@ def run_link_check(
             decision_state=decision_state,
             ignore_rule_id=ignore_rule_id,
             decision_reason=decision_reason,
+            check_meta=final_result.check_meta,
         )
         if final_result.screenshot_file:
             repository.add_link_check_screenshot(
