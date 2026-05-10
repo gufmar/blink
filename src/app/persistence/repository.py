@@ -879,6 +879,22 @@ class CrawlRepository:
         )
         self._connection.commit()
 
+    def get_latest_link_check_run_id_for_crawl(self, crawl_run_id: int) -> int | None:
+        """Return the most recent link_check_runs.id for this crawl run, if any."""
+        row = self._connection.execute(
+            """
+            SELECT id
+            FROM link_check_runs
+            WHERE based_on_crawl_run_id = ?
+            ORDER BY started_at DESC, id DESC
+            LIMIT 1
+            """,
+            (crawl_run_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return int(row["id"])
+
     def get_link_check_run(self, link_check_run_id: int) -> LinkCheckRunRecord | None:
         row = self._connection.execute(
             """

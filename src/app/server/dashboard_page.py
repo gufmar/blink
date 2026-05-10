@@ -9,6 +9,22 @@ from typing import Any
 from urllib.parse import urlsplit
 
 
+def _html_log_links_cell(run: dict[str, Any]) -> str:
+    pairs = list(run.get("log_links") or [])
+    if not pairs:
+        return "—"
+    return " ".join(
+        f'<a href="{html.escape(str(url))}">{html.escape(str(d))}</a>' for url, d in pairs
+    )
+
+
+def _html_report_link_cell(run: dict[str, Any]) -> str:
+    url = str(run.get("report_url") or "").strip()
+    if not url:
+        return "—"
+    return f'<a href="{html.escape(url)}">json</a>'
+
+
 def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, str]) -> str:
     """Build scheduler dashboard HTML using request-aware links."""
     tasks: list[dict[str, Any]] = list(payload.get("tasks") or [])
@@ -107,13 +123,25 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
     def row_for(job_row: dict[str, Any]) -> str:
         job_id = str(job_row.get("job_id") or "")
         job_name = str(job_row.get("job_name") or job_id)
-        history_url = str(job_row.get("history_url") or "")
+        crawl_task_row = job_row.get("crawl") or {}
+        link_task_row = job_row.get("link_check") or {}
+        history_url = str(job_row.get("history_url") or crawl_task_row.get("history_url") or "").strip()
+        crawl_list_u = str(job_row.get("crawl_runs_url") or crawl_task_row.get("crawl_runs_url") or "").strip()
+        lc_list_u = str(job_row.get("link_check_runs_url") or link_task_row.get("link_check_runs_url") or "").strip()
         crawl_task = job_row.get("crawl")
         link_task = job_row.get("link_check")
         history_link = f'<a href="{esc(history_url)}">(history)</a>' if history_url else ""
+        run_lists = ""
+        if crawl_list_u and lc_list_u:
+            run_lists = (
+                f'<span class="job-run-lists mono"> · <a href="{esc(crawl_list_u)}">crawls</a>'
+                f' · <a href="{esc(lc_list_u)}">link-checks</a></span>'
+            )
+        crawl_task = crawl_task_row
+        link_task = link_task_row
         return f"""<tr>
     <td>
-      <div class="job-title-row"><span class="job-title">{esc(job_name)}</span><span class="job-history">{history_link}</span></div>
+      <div class="job-title-row"><span class="job-title">{esc(job_name)}</span><span class="job-history">{history_link}{run_lists}</span></div>
       {_line_last("last crawl", crawl_task)}
       {_line_next("next crawl", crawl_task)}
       {_line_last("last check", link_task)}
@@ -473,10 +501,18 @@ def render_results_jobs_html(payload: dict[str, Any], *, links: dict[str, str]) 
 
     def row_for(row: dict[str, Any]) -> str:
         history_url = str(row.get("crawl_history_url") or "")
+        crawl_u = str(row.get("crawl_runs_url") or "")
+        lc_u = str(row.get("link_check_runs_url") or "")
+        list_links = ""
+        if crawl_u and lc_u:
+            list_links = (
+                f' <span class="mono">(<a href="{esc(crawl_u)}">crawls</a>'
+                f' · <a href="{esc(lc_u)}">link-checks</a>)</span>'
+            )
         title = (
-            f'<a href="{esc(history_url)}" class="mono">{esc(row.get("job_id", ""))}</a> · {esc(row.get("name", ""))}'
+            f'<a href="{esc(history_url)}" class="mono">{esc(row.get("job_id", ""))}</a>{list_links} · {esc(row.get("name", ""))}'
             if history_url
-            else f'{esc(row.get("job_id", ""))} · {esc(row.get("name", ""))}'
+            else f'{esc(row.get("job_id", ""))}{list_links} · {esc(row.get("name", ""))}'
         )
         crawl_line = _line("crawl", row.get("latest_crawl"), history_url)
         link_line = _line("link-check", row.get("latest_link_check"), str(row.get("latest_link_check_url") or ""))
@@ -548,6 +584,8 @@ def render_results_job_html(
         finished = esc(_fmt_dt(finished_val, ongoing=True))
         total_external_urls = int(run.get("total_external_urls") or 0)
         run_id = run.get("run_id", "")
+        log_cell = f'<td class="mono">{_html_log_links_cell(run)}</td>'
+        rep_cell = f'<td class="mono">{_html_report_link_cell(run)}</td>'
         if task_type == "all":
             if row_task_type == "link_check":
                 based_on = run.get("based_on_crawl_run_id")
@@ -564,6 +602,8 @@ def render_results_job_html(
     <td class="mono">{esc(run.get("checked_total") if run.get("checked_total") is not None else "—")}</td>
     <td class="mono">{_with_ratio_tooltip(run.get("ignored_total"), total_external_urls, "ignored")}</td>
     <td class="mono">{_with_ratio_tooltip(run.get("failed_total"), total_external_urls, "failed")}</td>
+    {log_cell}
+    {rep_cell}
   </tr>"""
             return f"""<tr>
     <td class="mono"><a href="{esc(run.get("details_url", ""))}">{started}</a></td>
@@ -573,6 +613,8 @@ def render_results_job_html(
     <td class="mono">{esc(run.get("pages_visited") if run.get("pages_visited") is not None else "—")}</td>
     <td class="mono">—</td>
     <td class="mono">{esc(run.get("pages_failed") if run.get("pages_failed") is not None else "—")}</td>
+    {log_cell}
+    {rep_cell}
   </tr>"""
         if task_type == "link_check":
             based_on = run.get("based_on_crawl_run_id")
@@ -588,6 +630,8 @@ def render_results_job_html(
     <td class="mono">{esc(run.get("checked_total") if run.get("checked_total") is not None else "—")}</td>
     <td class="mono">{_with_ratio_tooltip(run.get("ignored_total"), total_external_urls, "ignored")}</td>
     <td class="mono">{_with_ratio_tooltip(run.get("failed_total"), total_external_urls, "failed")}</td>
+    {log_cell}
+    {rep_cell}
   </tr>"""
         return f"""<tr>
     <td class="mono"><a href="{esc(run.get("details_url", ""))}">{started}</a></td>
@@ -596,17 +640,65 @@ def render_results_job_html(
     <td class="mono">{esc(run.get("pages_visited"))}</td>
     <td class="mono">—</td>
     <td class="mono">{esc(run.get("pages_failed"))}</td>
+    {log_cell}
+    {rep_cell}
   </tr>"""
 
     rows = "\n".join(row_for(run) for run in run_rows) if run_rows else ""
-    empty_colspan = "7" if task_type in {"all", "link_check"} else "6"
+    empty_colspan = "9" if task_type == "all" else "8"
     empty_row = f'<tr><td colspan="{empty_colspan}" class="empty">No runs available for this task yet.</td></tr>'
     if task_type == "link_check":
-        table_headers = ["Checked at", "Finished", "Link-check run id", "Visited/Checked", "Ignored", "Failed"]
+        table_headers = [
+            "Checked at",
+            "Finished",
+            "Link-check run id",
+            "Visited/Checked",
+            "Ignored",
+            "Failed",
+            "Logs",
+            "Report",
+        ]
     elif task_type == "all":
-        table_headers = ["Started", "Task type", "Finished", "Run id", "Visited/Checked", "Ignored", "Failed"]
+        table_headers = [
+            "Started",
+            "Task type",
+            "Finished",
+            "Run id",
+            "Visited/Checked",
+            "Ignored",
+            "Failed",
+            "Logs",
+            "Report",
+        ]
     else:
-        table_headers = ["Started", "Run id", "Finished", "Visited/Checked", "Ignored", "Failed"]
+        table_headers = [
+            "Started",
+            "Run id",
+            "Finished",
+            "Visited/Checked",
+            "Ignored",
+            "Failed",
+            "Logs",
+            "Report",
+        ]
+    merged_u = str(links.get("merged_runs_url") or "").strip()
+    crawl_u = str(links.get("crawl_runs_url") or "").strip()
+    lc_u = str(links.get("link_check_runs_url") or "").strip()
+    mode = str(links.get("run_mode") or "")
+    tabs_row = ""
+    if merged_u and crawl_u and lc_u:
+        def _tab_label(active: bool, label: str) -> str:
+            return f"<strong>{label}</strong>" if active else label
+
+        tabs_row = (
+            '<section class="panel" aria-label="Run views" style="margin-bottom: 1rem;">'
+            '<div class="panel-head">View</div>'
+            '<div style="padding: 0.75rem 1rem;">'
+            f'<a href="{esc(merged_u)}">{_tab_label(mode == "all", "Combined")}</a> · '
+            f'<a href="{esc(crawl_u)}">{_tab_label(mode == "crawl", "Crawls")}</a> · '
+            f'<a href="{esc(lc_u)}">{_tab_label(mode == "link_check", "Link checks")}</a>'
+            "</div></section>"
+        )
     toggle_row = ""
     if task_type == "all":
         show_crawl = bool(links.get("show_crawl"))
@@ -636,7 +728,7 @@ def render_results_job_html(
         table_rows=rows if rows else empty_row,
         footer_link=links.get("refresh", ""),
         footer_label="Refresh",
-        body_extra=toggle_row,
+        body_extra=tabs_row + toggle_row,
         branding_links=links,
     )
 
@@ -874,6 +966,8 @@ def render_job_task_history_html(
     <td class="mono">{_fmt(crawl.get("finished_at") or "ongoing")}</td>
     <td class="mono">{_fmt(crawl.get("pages_visited"))}</td>
     <td class="mono">{_fmt(crawl.get("pages_failed"))}</td>
+    <td class="mono">{_html_log_links_cell(crawl)}</td>
+    <td class="mono">{_html_report_link_cell(crawl)}</td>
   </tr>"""
         rows.append(crawl_rows)
         for link_run in list(crawl.get("link_checks") or []):
@@ -885,6 +979,8 @@ def render_job_task_history_html(
     <td class="mono">{_fmt(link_run.get("finished_at") or "ongoing")}</td>
     <td class="mono">{_fmt(link_run.get("checked_total"))}</td>
     <td class="mono">{_fmt(link_run.get("failed_total"))}</td>
+    <td class="mono">{_html_log_links_cell(link_run)}</td>
+    <td class="mono">{_html_report_link_cell(link_run)}</td>
   </tr>"""
             )
 
@@ -897,8 +993,8 @@ def render_job_task_history_html(
             ("Back to jobs", links.get("jobs_index", "")),
         ],
         panel_title="Crawl runs with related link-check runs",
-        table_headers=["Type", "Run id", "Started", "Finished", "Visited/Checked", "Failed"],
-        table_rows="".join(rows) if rows else '<tr><td colspan="6" class="empty">No run history available.</td></tr>',
+        table_headers=["Type", "Run id", "Started", "Finished", "Visited/Checked", "Failed", "Logs", "Report"],
+        table_rows="".join(rows) if rows else '<tr><td colspan="8" class="empty">No run history available.</td></tr>',
         footer_link=links.get("refresh", ""),
         footer_label="Refresh",
         branding_links=links,

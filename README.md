@@ -237,6 +237,12 @@ What survives a purge (job-level state, not bound to runs):
 - `link_alerts` (including paused/`ignored` Slack lifecycle buckets), `link_alert_events`, `link_failure_state`, `link_retest_queue` — all preserved. Stale `link_alerts.last_reported_run_id` references to deleted crawl runs are NULLed so they don't dangle.
 - Master `pages` and `external_links` rows survive (their `*_run_id` columns use `ON DELETE SET NULL`).
 
+## Results retention (dashboard / disk)
+
+Blink does **not** automatically delete old crawl or link-check runs or rotate SQLite databases. History grows until you run `blink jobs purge` (see above) or remove files manually. Purging crawl runs drops per-run rows (`link_check_results`, screenshots, crawl snapshots for those runs, and link-check runs layered on those crawls). Job-level broken-link bookkeeping (`link_alerts`, `link_failure_state`, ignore rules, alert events, retest queue) intentionally survives that purge; stale `link_alerts.last_reported_run_id` pointers are cleared when referenced crawl runs disappear.
+
+The CLI and scheduler append to **daily** log files under `jobs/data/<job_id>/logs/YYYY-MM-DD.log` (use the dashboard log links to open the files for a given run). Optional JSON link-check reports are written under `jobs/data/<job_id>/reports/` when `link_check.write_json_report` is enabled.
+
 ## Crawl Hardening (Step 6)
 
 `crawl run` and `crawl explore` now use one shared Playwright browser context per run, so cookies/session state persist across page navigations in that run.

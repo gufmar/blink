@@ -6,7 +6,7 @@ from pathlib import Path
 
 from starlette.testclient import TestClient
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from app.persistence.repository import CrawlRepository
 from app.persistence.sqlite import connect_sqlite, initialize_schema
@@ -145,7 +145,8 @@ def test_api_results_endpoints(tmp_path: Path) -> None:
     assert runs.status_code == 200
     runs_payload = runs.json()
     assert runs_payload["job"]["job_id"] == "zzz"
-    assert runs_payload["runs"][0]["run_id"] == run_id
+    crawl_rows = [r for r in runs_payload["runs"] if r.get("task_type") == "crawl"]
+    assert crawl_rows and crawl_rows[0]["run_id"] == run_id
     link_check_runs = client.get("/api/results/jobs/zzz/runs?task_type=link_check")
     assert link_check_runs.status_code == 200
     link_check_runs_payload = link_check_runs.json()
@@ -203,6 +204,15 @@ def test_dashboard_results_pages(tmp_path: Path) -> None:
     assert "Blink results" in jobs_page.text
     assert "/dashboard/results/zzz" in jobs_page.text
 
+    crawls_page = client.get("/dashboard/results/zzz/crawls")
+    assert crawls_page.status_code == 200
+    assert "View" in crawls_page.text
+    assert "/dashboard/results/zzz/link-checks" in crawls_page.text
+
+    lc_only = client.get("/dashboard/results/zzz/link-checks")
+    assert lc_only.status_code == 200
+    assert f"?task_type=link_check" in lc_only.text
+
     job_page = client.get("/dashboard/results/zzz")
     assert job_page.status_code == 200
     assert f"/dashboard/results/zzz/runs/{run_id}" in job_page.text
@@ -214,7 +224,7 @@ def test_dashboard_results_pages(tmp_path: Path) -> None:
     assert "https://broken.example.net" in run_page.text
     assert "https://ignored.example.net" in run_page.text
     assert "Ignored link-check results (latest per target)" in run_page.text
-    assert "Run start" in run_page.text
+    assert "Run summary" in run_page.text
     assert "Main dashboard" in run_page.text
     assert "Apply filters" in run_page.text
     assert "Field" not in run_page.text
@@ -235,6 +245,25 @@ def test_dashboard_results_pages(tmp_path: Path) -> None:
     assert structure_external_page.status_code == 200
     assert "failed only" in structure_external_page.text
     assert "ignored only" in structure_external_page.text
+
+    log_day = date.today().isoformat()
+    log_dir = tmp_path / "data" / "zzz" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / f"{log_day}.log").write_text("blink-test-log-line\n", encoding="utf-8")
+    log_ok = client.get(f"/dashboard/results/zzz/logs/{log_day}")
+    assert log_ok.status_code == 200
+    assert "blink-test-log-line" in log_ok.text
+    assert client.get("/dashboard/results/zzz/logs/not-valid").status_code == 404
+    assert client.get("/dashboard/results/zzz/logs/2020-01-01").status_code == 404
+
+    reports_dir = tmp_path / "data" / "zzz" / "reports"
+    reports_dir.mkdir(parents=True)
+    sample_report = reports_dir / f"report_zzz_{log_day}_12-00.json"
+    sample_report.write_text('{"ok": true}', encoding="utf-8")
+    report_fetch = client.get(f"/dashboard/results/zzz/reports/{sample_report.name}")
+    assert report_fetch.status_code == 200
+    assert report_fetch.json() == {"ok": True}
+    assert client.get("/dashboard/results/zzz/reports/evil.json").status_code == 404
 
 
 def test_dashboard_results_pages_honor_proxy_root_path(tmp_path: Path) -> None:
@@ -267,5 +296,5 @@ def test_dashboard_results_pages_honor_configured_base_path(tmp_path: Path) -> N
     assert run_page.status_code == 200
     assert "/blink/api/results/jobs/zzz/runs/" in run_page.text
     assert "Clear" in run_page.text
-    assert "exclude_status=403" in run_page.text
+    assert "include_status=403" in run_page.text
     assert f"/blink/dashboard/results/zzz/runs/{run_id}/structure" in run_page.text

@@ -398,3 +398,24 @@ def test_purge_link_check_run_only_cascades_link_check_data(tmp_path) -> None:
     ).fetchone()
     assert int(result_rows["n"]) == 0
     connection.close()
+
+
+def test_get_latest_link_check_run_id_for_crawl(tmp_path) -> None:
+    connection = connect_sqlite(tmp_path / "lc-latest.db")
+    initialize_schema(connection)
+    repo = CrawlRepository(connection)
+    crawl_id = repo.create_run("job-lc-latest")
+    repo.finish_run(crawl_id, 1, 0, 0)
+    assert repo.get_latest_link_check_run_id_for_crawl(crawl_id) is None
+    repo.create_link_check_run(
+        job_id="job-lc-latest",
+        based_on_crawl_run_id=crawl_id,
+        started_at="2024-01-01T00:00:00+00:00",
+    )
+    lc2 = repo.create_link_check_run(
+        job_id="job-lc-latest",
+        based_on_crawl_run_id=crawl_id,
+        started_at="2025-01-01T00:00:00+00:00",
+    )
+    assert repo.get_latest_link_check_run_id_for_crawl(crawl_id) == lc2
+    connection.close()
