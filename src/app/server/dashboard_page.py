@@ -1183,6 +1183,7 @@ def render_results_run_html(
             f"<tr><td>job name</td><td>{esc(job.get('name', ''))}</td></tr>"
             f"<tr><td>run start</td><td class=\"mono\">{esc(run.get('started_at') or '—')}</td></tr>"
             f"<tr><td>run end</td><td class=\"mono\">{esc(run.get('finished_at') or '—')}</td></tr>"
+            f"<tr><td>run logs</td><td>{_html_log_links_cell(run)}</td></tr>"
         ),
         footer_link=links.get("refresh", ""),
         footer_label="Refresh",

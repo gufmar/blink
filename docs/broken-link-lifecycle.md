@@ -66,7 +66,7 @@ Inbound events are normalized to `InboundActionEvent` (see below). Apply with `b
 
 ### Queued retest (`retest` / `:curly_loop:`)
 
-Reactions or commands enqueue a row in `link_retest_queue`. Each `blink link-check run` drains pending items early in the run: one HTTP check per queued URL, then a thread reply (`still failing` vs `Retest OK`) and an audit row in `link_alert_events`.
+Reactions or commands enqueue a row in `link_retest_queue`. Each `blink check run` drains pending items early in the run: one HTTP check per queued URL, then a thread reply (`still failing` vs `Retest OK`) and an audit row in `link_alert_events`.
 
 ## Inbound Action Contract (Implementation-Oriented)
 

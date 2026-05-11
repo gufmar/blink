@@ -19,7 +19,7 @@ def test_link_check_ignore_add_list_remove(tmp_path) -> None:
     add_result = runner.invoke(
         app,
         [
-            "link-check",
+            "check",
             "ignore",
             "add",
             "--job",
@@ -42,7 +42,7 @@ def test_link_check_ignore_add_list_remove(tmp_path) -> None:
     list_result = runner.invoke(
         app,
         [
-            "link-check",
+            "check",
             "ignore",
             "list",
             "--job",
@@ -60,7 +60,7 @@ def test_link_check_ignore_add_list_remove(tmp_path) -> None:
     remove_result = runner.invoke(
         app,
         [
-            "link-check",
+            "check",
             "ignore",
             "remove",
             "--job",
@@ -77,7 +77,7 @@ def test_link_check_ignore_add_list_remove(tmp_path) -> None:
     list_active = runner.invoke(
         app,
         [
-            "link-check",
+            "check",
             "ignore",
             "list",
             "--job",
@@ -124,7 +124,7 @@ def test_link_check_ignore_impact_latest_and_run_id(tmp_path) -> None:
     latest_result = runner.invoke(
         app,
         [
-            "link-check",
+            "check",
             "ignore",
             "impact",
             "--job",
@@ -143,7 +143,7 @@ def test_link_check_ignore_impact_latest_and_run_id(tmp_path) -> None:
     run1_result = runner.invoke(
         app,
         [
-            "link-check",
+            "check",
             "ignore",
             "impact",
             "--job",

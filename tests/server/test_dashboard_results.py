@@ -218,8 +218,15 @@ def test_dashboard_results_pages(tmp_path: Path) -> None:
     assert f"/dashboard/results/zzz/runs/{run_id}" in job_page.text
     assert "Run history" in job_page.text
 
+    log_day = date.today().isoformat()
+    log_dir = tmp_path / "data" / "zzz" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    (log_dir / f"{log_day}.log").write_text("blink-test-log-line\n", encoding="utf-8")
+
     run_page = client.get(f"/dashboard/results/zzz/runs/{run_id}")
     assert run_page.status_code == 200
+    assert "run logs" in run_page.text
+    assert f"/dashboard/results/zzz/logs/{log_day}" in run_page.text
     assert "Failed link-check results" in run_page.text
     assert "https://broken.example.net" in run_page.text
     assert "https://ignored.example.net" in run_page.text
@@ -246,10 +253,6 @@ def test_dashboard_results_pages(tmp_path: Path) -> None:
     assert "failed only" in structure_external_page.text
     assert "ignored only" in structure_external_page.text
 
-    log_day = date.today().isoformat()
-    log_dir = tmp_path / "data" / "zzz" / "logs"
-    log_dir.mkdir(parents=True)
-    (log_dir / f"{log_day}.log").write_text("blink-test-log-line\n", encoding="utf-8")
     log_ok = client.get(f"/dashboard/results/zzz/logs/{log_day}")
     assert log_ok.status_code == 200
     assert "blink-test-log-line" in log_ok.text

@@ -45,7 +45,7 @@ def test_link_check_show_lists_latest_results_for_run(tmp_path) -> None:
     result = runner.invoke(
         app,
         [
-            "link-check",
+            "check",
             "show",
             "--job",
             "jobs/cardano.org.job.json",

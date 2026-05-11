@@ -1,4 +1,4 @@
-"""Invoke ``blink crawl`` / ``blink link-check`` via subprocess for scheduled runs."""
+"""Invoke ``blink crawl`` / ``blink check`` via subprocess for scheduled runs."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ def ensure_job_under_jobs_root(jobs_root: Path, job_path: Path) -> Path:
 
 def build_argv(job_path: Path, task_kind: TaskKind) -> list[str]:
     """Build argv for ``python -m app.cli.main …``."""
-    cmd = task_kind.replace("_", "-")  # link_check -> link-check (CLI name)
+    cmd = "check" if task_kind == "link_check" else "crawl"
     return [
         sys.executable,
         "-m",

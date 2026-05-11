@@ -53,26 +53,26 @@ blink crawl run --job jobs/cardano.org.job.json --db db.sqlite3 --max-pages 1
 Run link checks against discovered external links from the latest crawl run:
 
 ```bash
-blink link-check run --job jobs/cardano.org.job.json --db db.sqlite3
+blink check run --job jobs/cardano.org.job.json --db db.sqlite3
 ```
 
 Run link checks for a specific crawl run and limit:
 
 ```bash
-blink link-check run --job jobs/cardano.org.job.json --db db.sqlite3 --run-id 2 --limit 25
+blink check run --job jobs/cardano.org.job.json --db db.sqlite3 --run-id 2 --limit 25
 ```
 
-Control live output in `link-check run`:
+Control live output in `check run`:
 
 ```bash
-blink link-check run --job jobs/cardano.org.job.json --show-live-failures --show-progress
-blink link-check run --job jobs/cardano.org.job.json --hide-live-failures --hide-progress
+blink check run --job jobs/cardano.org.job.json --show-live-failures --show-progress
+blink check run --job jobs/cardano.org.job.json --hide-live-failures --hide-progress
 ```
 
 Inspect link-check results (latest check per target URL for a run):
 
 ```bash
-blink link-check show --job jobs/cardano.org.job.json --run-id 2 --only-failed
+blink check show --job jobs/cardano.org.job.json --run-id 2 --only-failed
 ```
 
 ## Ops Foundation (Step 4)
@@ -137,7 +137,7 @@ blink crawl run --job jobs/cardano.org.job.json --max-pages 1
 Run link-check using default per-job DB path:
 
 ```bash
-blink link-check run --job jobs/cardano.org.job.json --limit 25
+blink check run --job jobs/cardano.org.job.json --limit 25
 ```
 
 Optional overrides:
@@ -148,7 +148,7 @@ blink crawl run --job jobs/cardano.org.job.json --db /tmp/custom.sqlite3 --debug
 
 ## Scheduler (`blink serve`)
 
-Each job’s `schedule` section defines **crawl** and **link-check** tasks (interval or cron). `blink serve` starts Slack routes and a background scheduler that runs `blink crawl run` and `blink link-check run` as **subprocesses** (same as interactive CLI). Job files whose name starts with `_` (such as `_default.job.json`) are not registered.
+Each job’s `schedule` section defines **crawl** and **link-check** tasks (interval or cron). `blink serve` starts Slack routes and a background scheduler that runs `blink crawl run` and `blink check run` as **subprocesses** (same as interactive CLI). Job files whose name starts with `_` (such as `_default.job.json`) are not registered.
 
 - Persisted scheduler state: `<jobs-root>/.blink/scheduler.sqlite`
 - `GET /api/schedule` — JSON with declarative schedule plus next/last run times
@@ -312,7 +312,7 @@ blink jobs pages-content-metrics --job jobs/cardano.org.job.json --only-signific
 
 ## Link-check JSON reporting (Step 8)
 
-When `link_check.write_json_report` is enabled, each `blink link-check run` writes one JSON report:
+When `link_check.write_json_report` is enabled, each `blink check run` writes one JSON report:
 
 - path: `jobs/data/<job_id>/reports/`
 - filename: `report_<job_id>_yyyy-mm-dd_hh-mm.json`
@@ -384,15 +384,15 @@ Example:
 Notes:
 
 - Blink core lifecycle/action handling is destination-agnostic; Slack is the first implemented adapter.
-- **Slack thread-first lifecycle (Step 12):** when `lifecycle.enabled` is true and `post_alerts_via_bot` is true (default), broken-link alerts are posted with `chat.postMessage` using `bot_token_env`, then a thread bootstrap lists emoji actions and command overrides. `action_aliases.retest` (default `curly_loop`) queues an immediate single-link retest; `blink link-check run` processes the queue at the start of each run and replies in the same thread.
+- **Slack thread-first lifecycle (Step 12):** when `lifecycle.enabled` is true and `post_alerts_via_bot` is true (default), broken-link alerts are posted with `chat.postMessage` using `bot_token_env`, then a thread bootstrap lists emoji actions and command overrides. `action_aliases.retest` (default `curly_loop`) queues an immediate single-link retest; `blink check run` processes the queue at the start of each run and replies in the same thread.
 - `blink notifications slack handle-event --job <job.json> --event event.json` applies one Slack `reaction_added` / `message` payload to the job SQLite DB (use for local testing).
 - **Slack Events API (Step 14):** `uvicorn` is included in the default install. After `pip install -e .` (or `pip install .` in production), run `blink serve --host 0.0.0.0 --port 8080` (optional `--jobs-root` defaults to `<repo>/jobs`). Configure Slack's Events Request URL to `https://<your-host>/notifications/slack/events`.
 - **Routing model:** one Slack workspace, one Blink serve instance, and strict `channel_id -> job` mapping. Each enabled Slack destination channel in job configs must be unique. If duplicate channel IDs are detected across jobs, `blink serve` fails startup with a clear error.
 - **Compatibility path:** `/notifications/slack/job/<slug>` still works temporarily for job-specific testing/migration.
 - Set the signing secret in the env named by `notifications.slack_signing_secret_env` (default `BLINK_SLACK_SIGNING_SECRET`). TLS is usually handled by a reverse proxy.
 - `blink notifications test --job jobs/cardano.org.job.json` sends a greeting/test message with job metadata.
-- `blink link-check run` dispatches notifications for newly discovered reportable broken links.
-- `blink link-check run --max-blinks 1` limits how many new broken links are notified per run (flood protection).
+- `blink check run` dispatches notifications for newly discovered reportable broken links.
+- `blink check run --max-blinks 1` limits how many new broken links are notified per run (flood protection).
 - Previously reported open links are tracked in DB and not re-notified every run; they are only sent again when reminder timing is due.
 - `notifications.crawl_summary_on_run` enables crawl summary messages after each crawl run.
 - If a destination credential env var is missing (e.g. webhook URL), dispatch is skipped and logged.

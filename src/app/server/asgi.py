@@ -1179,12 +1179,16 @@ async def dashboard_results_run(request: Request) -> HTMLResponse:
                 return HTMLResponse("Run not found", status_code=404)
             selected_crawl_run_id = link_check_run.based_on_crawl_run_id
             selected_link_check_run_id = link_check_run.run_id
+            run_log_started_at = link_check_run.started_at
+            run_log_finished_at = link_check_run.finished_at
         else:
             run = repo.get_run_record(job_id=job_id, run_id=run_id)
             if run is None:
                 return HTMLResponse("Run not found", status_code=404)
             selected_crawl_run_id = run.run_id
             selected_link_check_run_id = None
+            run_log_started_at = run.started_at
+            run_log_finished_at = run.finished_at
         failed_links_all = repo.list_latest_failed_link_check_results(
             selected_crawl_run_id,
             link_check_run_id=selected_link_check_run_id,
@@ -1295,6 +1299,18 @@ async def dashboard_results_run(request: Request) -> HTMLResponse:
         "link_check_run_id": selected_link_check_run_id,
         "based_on_crawl_run_id": selected_crawl_run_id,
     }
+    log_attach_row: dict[str, Any] = {
+        "task_type": task_type,
+        "started_at": run_log_started_at,
+        "finished_at": run_log_finished_at,
+    }
+    _attach_log_report_urls_for_run_rows(
+        request,
+        jobs_root=jobs_root,
+        job_id=job_id,
+        run_rows=[log_attach_row],
+    )
+    run_data["log_links"] = log_attach_row["log_links"]
     page = render_results_run_html(
         job=job,
         run=run_data,

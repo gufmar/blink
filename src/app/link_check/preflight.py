@@ -112,6 +112,10 @@ def run_preflight(
             )
         except URLError as exc:
             return PreflightResult(None, None, None, str(exc))
+        except OSError as exc:
+            # urllib may raise TimeoutError (subclass of OSError) from getresponse()/read
+            # without wrapping it in URLError (unlike errors during request send).
+            return PreflightResult(None, None, None, str(exc))
 
     head_out = head_request()
     if head_out is not None:
@@ -141,6 +145,8 @@ def run_preflight(
             error_message=None,
         )
     except URLError as exc:
+        return PreflightResult(None, None, None, str(exc))
+    except OSError as exc:
         return PreflightResult(None, None, None, str(exc))
 
 

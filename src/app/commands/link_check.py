@@ -1,4 +1,4 @@
-"""`blink link-check` command group."""
+"""`blink check` command group."""
 
 from __future__ import annotations
 
@@ -131,7 +131,7 @@ def _emit_live_failure(
     if result.ok:
         return
     reason = result.error_message or (f"HTTP {result.status_code}" if result.status_code is not None else "Unknown error")
-    console.print(f"link-check failed: {url} -> {reason}", style="yellow")
+    console.print(f"check failed: {url} -> {reason}", style="yellow")
     for ref in source_refs or []:
         page_url = ref.get("page_url", "")
         anchor_text = ref.get("anchor_text")

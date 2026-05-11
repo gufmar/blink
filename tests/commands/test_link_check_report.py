@@ -78,7 +78,7 @@ def test_link_check_run_writes_json_report_when_enabled(tmp_path, monkeypatch) -
     result = runner.invoke(
         app,
         [
-            "link-check",
+            "check",
             "run",
             "--job",
             "jobs/cardano.org.job.json",
@@ -88,7 +88,7 @@ def test_link_check_run_writes_json_report_when_enabled(tmp_path, monkeypatch) -
         ],
     )
     assert result.exit_code == 0
-    assert "link-check failed:" not in result.output
+    assert "check failed:" not in result.output
     report_files = sorted(custom_paths.reports_dir.glob("report_cardano.org_*.json"))
     assert len(report_files) == 1
     payload = json.loads(report_files[0].read_text(encoding="utf-8"))
@@ -163,7 +163,7 @@ def test_link_check_run_prints_source_pages_for_live_failures(tmp_path, monkeypa
     result = runner.invoke(
         app,
         [
-            "link-check",
+            "check",
             "run",
             "--job",
             "jobs/cardano.org.job.json",
@@ -174,7 +174,7 @@ def test_link_check_run_prints_source_pages_for_live_failures(tmp_path, monkeypa
         ],
     )
     assert result.exit_code == 0
-    assert "link-check failed: https://bad.example -> HTTP Error 404" in result.output
+    assert "check failed: https://bad.example -> HTTP Error 404" in result.output
     assert "└ on https://cardano.org/docs" in result.output
     assert "└ on https://cardano.org/tutorial" in result.output
     assert "↳ text: docs text" in result.output
@@ -252,7 +252,7 @@ def test_link_check_run_max_blinks_reports_new_across_runs(tmp_path, monkeypatch
     first = runner.invoke(
         app,
         [
-            "link-check",
+            "check",
             "run",
             "--job",
             "jobs/cardano.org.job.json",
@@ -271,7 +271,7 @@ def test_link_check_run_max_blinks_reports_new_across_runs(tmp_path, monkeypatch
     second = runner.invoke(
         app,
         [
-            "link-check",
+            "check",
             "run",
             "--job",
             "jobs/cardano.org.job.json",
