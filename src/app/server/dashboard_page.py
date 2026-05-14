@@ -820,6 +820,7 @@ def render_results_structure_html(
 (() => {{
   const payloadEl = document.getElementById("structure-payload");
   const payload = JSON.parse(payloadEl ? payloadEl.textContent : "{{}}");
+  const treeExternalMode = payload.external_mode || "none";
   const pageContentApi = payload.page_content_api || null;
   const host = document.getElementById("radial-tree");
   const popover = document.getElementById("node-popover");
@@ -837,6 +838,39 @@ def render_results_structure_html(
     out.push(node);
     (node.children || []).forEach((child) => flatten(child, out));
     return out;
+  }}
+
+  function externalUrlHostname(d) {{
+    const raw = String(d.data.target_url || d.data.url || d.data.name || "").trim();
+    try {{
+      const host = new URL(raw).hostname;
+      return host || raw;
+    }} catch (_e) {{
+      const m = /^https?:\\/\\/([^/?#]+)/i.exec(raw);
+      return m ? m[1] : raw;
+    }}
+  }}
+
+  function isFailedExternalUrlLabel(d) {{
+    return (
+      treeExternalMode === "failed"
+      && d.data.node_kind === "external_url"
+      && (Number(d.data.failed_count || 0) > 0 || d.data.ok === false)
+    );
+  }}
+
+  function nodeDisplayText(d) {{
+    if (d.data.node_kind === "external_domain") {{
+      return `@${{d.data.name || ""}}`;
+    }}
+    if (isFailedExternalUrlLabel(d)) {{
+      return externalUrlHostname(d);
+    }}
+    return d.data.name || "/";
+  }}
+
+  function nodeLabelFill(d) {{
+    return isFailedExternalUrlLabel(d) ? "#dc2626" : "#0f172a";
   }}
 
   function escHtml(value) {{
@@ -965,7 +999,9 @@ def render_results_structure_html(
       ? d3.interpolateRgb("#ffffff", "#dc2626")
       : d3.interpolateBlues;
     const colorScale = d3.scaleSequential([0, maxMetric], colorInterpolator);
-    const sizeScale = d3.scaleSqrt().domain([0, maxSizeMetric]).range([2.5, 8]);
+    const sizeRMin = 2;
+    const sizeRMax = 2 + 3 * (8 - 2.5);
+    const sizeScale = d3.scaleSqrt().domain([0, maxSizeMetric]).range([sizeRMin, sizeRMax]);
 
     const svg = d3.create("svg")
       .attr("viewBox", [-radius, -radius, width, width])
@@ -1021,7 +1057,8 @@ def render_results_structure_html(
       .attr("x", (d) => d.x < Math.PI === !d.children ? 8 : -8)
       .attr("text-anchor", (d) => d.x < Math.PI === !d.children ? "start" : "end")
       .attr("transform", (d) => d.x >= Math.PI ? "rotate(180)" : null)
-      .text((d) => (d.data.node_kind === "external_domain" ? `@${{d.data.name || ""}}` : (d.data.name || "/")))
+      .attr("fill", (d) => nodeLabelFill(d))
+      .text((d) => nodeDisplayText(d))
       .clone(true).lower()
       .attr("stroke", "white");
 
