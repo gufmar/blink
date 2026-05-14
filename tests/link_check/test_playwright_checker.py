@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from app.link_check.playwright_checker import PlaywrightLinkChecker, PlaywrightLinkCheckerConfig
+from app.link_check.playwright_checker import (
+    PlaywrightLinkChecker,
+    PlaywrightLinkCheckerConfig,
+    _playwright_transport_died,
+)
 from app.render.playwright_client import BrowserSettings, BrowserViewport
 
 
@@ -59,6 +63,9 @@ class _FakeContext:
 
     def new_page(self) -> _FakePage:
         return self._page
+
+    def close(self) -> None:
+        return
 
 
 def _checker_with_context(page: _FakePage) -> PlaywrightLinkChecker:
@@ -174,3 +181,76 @@ def test_playwright_checker_partial_success_on_navigation_timeout() -> None:
     assert result.screenshot_file is None
     assert result.check_meta is not None
     assert "partial_timeout_recovery" in result.check_meta
+
+
+def test_playwright_transport_died_detects_websocket_close() -> None:
+    exc = RuntimeError("websocket: close 1006 (abnormal closure): unexpected EOF")
+    assert _playwright_transport_died(exc) is True
+    assert _playwright_transport_died(RuntimeError("net::ERR_CONNECTION_REFUSED")) is False
+
+
+def _checker_for_transport_retry() -> PlaywrightLinkChecker:
+    return PlaywrightLinkChecker(
+        browser_settings=BrowserSettings(
+            user_agent="Blink/3.0",
+            viewport=BrowserViewport(width=1200, height=800),
+            locale="en-US",
+            timezone_id="UTC",
+            extra_http_headers={},
+            storage_state_path=None,
+            persist_storage_state=False,
+            headless=True,
+            block_request_netloc_contains=[],
+        ),
+        config=PlaywrightLinkCheckerConfig(
+            navigation_timeout_seconds=5,
+            network_idle_seconds=0,
+            settle_wait_seconds=0,
+            wait_until="commit",
+            accept_partial_success_on_navigation_timeout=False,
+            artifacts_dir=None,
+            save_failure_screenshot=False,
+        ),
+    )
+
+
+def test_playwright_checker_retries_after_websocket_transport_loss() -> None:
+    page_fail = _FakePage(
+        goto_exc=RuntimeError("websocket: close 1006 (abnormal closure): unexpected EOF"),
+    )
+    page_ok = _FakePage(response=_FakeResponse(200))
+    checker = _checker_for_transport_retry()
+    opens: list[int] = []
+
+    def fake_open_session() -> None:
+        if checker._context is not None:
+            return
+        opens.append(1)
+        checker._context = _FakeContext(page_fail) if len(opens) == 1 else _FakeContext(page_ok)
+
+    checker.open_session = fake_open_session  # type: ignore[method-assign]
+
+    result = checker.check("https://recover.example")
+    assert len(opens) == 2
+    assert result.ok is True
+    assert result.status_code == 200
+
+
+def test_playwright_checker_returns_failure_after_two_transport_losses() -> None:
+    transport = RuntimeError("websocket: close 1006 (abnormal closure): unexpected EOF")
+    page_fail = _FakePage(goto_exc=transport)
+    checker = _checker_for_transport_retry()
+
+    def fake_open_session() -> None:
+        if checker._context is not None:
+            return
+        checker._context = _FakeContext(page_fail)
+
+    checker.open_session = fake_open_session  # type: ignore[method-assign]
+
+    result = checker.check("https://dead.example")
+    assert result.ok is False
+    assert result.status_code is None
+    assert "1006" in (result.error_message or "")
+    assert result.check_meta is not None
+    assert "transport_retry_exhausted" in result.check_meta

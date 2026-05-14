@@ -2180,6 +2180,23 @@ class CrawlRepository:
             for row in rows
         ]
 
+    def get_run_page_main_text(self, run_id: int, url: str) -> str | None:
+        """Return stored main_text for a page in a crawl run, if any."""
+        row = self._connection.execute(
+            """
+            SELECT rp.main_text AS main_text
+            FROM run_pages rp
+            JOIN pages p ON p.id = rp.page_id
+            WHERE rp.run_id = ? AND p.url = ?
+            LIMIT 1
+            """,
+            (run_id, url),
+        ).fetchone()
+        if row is None or row["main_text"] is None:
+            return None
+        text = str(row["main_text"]).strip()
+        return text if text else None
+
     def get_table_counts(self) -> dict[str, int]:
         tables = (
             "crawl_runs",

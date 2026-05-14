@@ -971,7 +971,57 @@ async def api_results_run_structure(request: Request) -> JSONResponse:
             external_links_by_source=external_links_by_source,
         )
         payload["selected_link_check_run_id"] = selected_link_check_run_id
+        payload["task_type"] = task_type
+        payload["page_content_api"] = {
+            "href": _path_for(request, "api_results_run_page_main_text", job_id=job_id, run_id=run_id),
+            "task_type": task_type,
+            "link_check_run_id": selected_link_check_run_id,
+        }
         return JSONResponse(payload)
+    finally:
+        _close_repo(repo_and_conn)
+
+
+_PAGE_MAIN_TEXT_JSON_MAX = 400_000
+
+
+async def api_results_run_page_main_text(request: Request) -> JSONResponse:
+    """Return stored main_text for a page URL in the resolved crawl run (on demand for structure UI)."""
+    jobs_root: Path = request.app.state.jobs_root
+    job_id = str(request.path_params["job_id"])
+    run_id = int(request.path_params["run_id"])
+    task_type = str(request.query_params.get("task_type") or "crawl").strip().lower()
+    if task_type not in {"crawl", "link_check"}:
+        task_type = "crawl"
+    link_check_run_id_raw = str(request.query_params.get("link_check_run_id") or "").strip()
+    link_check_run_id_query = int(link_check_run_id_raw) if link_check_run_id_raw.isdigit() else None
+    page_url = str(request.query_params.get("url") or "").strip()
+    if not page_url:
+        return _json_error(400, "missing_url")
+    job = _job_entry_by_id(jobs_root, job_id)
+    if job is None:
+        return _json_error(404, "job_not_found")
+    repo_and_conn = _open_repo_if_exists(_db_path_for_job(jobs_root, job_id))
+    if repo_and_conn is None:
+        return _json_error(404, "run_not_found")
+    repo, _ = repo_and_conn
+    try:
+        try:
+            selected_crawl_run_id, _ = _resolve_structure_runs(
+                repo,
+                job_id=job_id,
+                run_id=run_id,
+                task_type=task_type,
+                link_check_run_id_query=link_check_run_id_query,
+            )
+        except LookupError:
+            return _json_error(404, "run_not_found")
+        main_text = repo.get_run_page_main_text(selected_crawl_run_id, page_url)
+        if main_text is None:
+            return JSONResponse({"url": page_url, "main_text": None, "truncated": False})
+        truncated = len(main_text) > _PAGE_MAIN_TEXT_JSON_MAX
+        out_text = main_text[:_PAGE_MAIN_TEXT_JSON_MAX] if truncated else main_text
+        return JSONResponse({"url": page_url, "main_text": out_text, "truncated": truncated})
     finally:
         _close_repo(repo_and_conn)
 
@@ -1483,6 +1533,11 @@ async def dashboard_results_structure(request: Request) -> HTMLResponse:
     )
     structure_payload["selected_link_check_run_id"] = selected_link_check_run_id
     structure_payload["task_type"] = task_type
+    structure_payload["page_content_api"] = {
+        "href": _path_for(request, "api_results_run_page_main_text", job_id=job_id, run_id=run_id),
+        "task_type": task_type,
+        "link_check_run_id": selected_link_check_run_id,
+    }
     page = render_results_structure_html(
         job=job,
         run={
@@ -1748,6 +1803,12 @@ def build_app(
                 api_results_run_structure,
                 methods=["GET"],
                 name="api_results_run_structure",
+            ),
+            Route(
+                "/api/results/jobs/{job_id}/runs/{run_id:int}/page-main-text",
+                api_results_run_page_main_text,
+                methods=["GET"],
+                name="api_results_run_page_main_text",
             ),
             Route("/dashboard", schedule_dashboard, methods=["GET"], name="dashboard_schedule"),
             Route("/dashboard/results", dashboard_results_jobs, methods=["GET"], name="dashboard_results_jobs"),

@@ -57,7 +57,14 @@ def _setup_job_with_data(tmp_path: Path, job_id: str = "zzz") -> tuple[Path, int
         based_on_crawl_run_id=run_id,
         started_at=datetime.now(tz=UTC).isoformat(),
     )
-    repo.add_page_result(run_id=run_id, url="https://example.org", depth=0, status_code=200, ok=True)
+    repo.add_page_result(
+        run_id=run_id,
+        url="https://example.org",
+        depth=0,
+        status_code=200,
+        ok=True,
+        main_text="Hello crawl text",
+    )
     repo.add_page_result(
         run_id=run_id,
         url="https://example.org/failure",
@@ -171,6 +178,18 @@ def test_api_results_endpoints(tmp_path: Path) -> None:
     assert structure_payload["external_mode"] == "none"
     assert structure_payload["nodes"]["name"] == "/"
     assert structure_payload["nodes"]["node_kind"] == "internal_root"
+    assert "page_content_api" in structure_payload
+    assert "/page-main-text" in structure_payload["page_content_api"]["href"]
+    assert structure_payload["task_type"] == "crawl"
+    page_text = client.get(
+        "/api/results/jobs/zzz/runs/"
+        + str(run_id)
+        + "/page-main-text?url=https%3A%2F%2Fexample.org&task_type=crawl"
+    )
+    assert page_text.status_code == 200
+    assert page_text.json()["main_text"] == "Hello crawl text"
+    missing = client.get(f"/api/results/jobs/zzz/runs/{run_id}/page-main-text?task_type=crawl")
+    assert missing.status_code == 400
     structure_with_failed_external = client.get(
         f"/api/results/jobs/zzz/runs/{run_id}/structure?external_mode=failed"
     )
@@ -241,6 +260,7 @@ def test_dashboard_results_pages(tmp_path: Path) -> None:
     assert "Radial tidy tree" in structure_page.text
     assert "Structure JSON" in structure_page.text
     assert "Open run details" in structure_page.text
+    assert "page-main-text" in structure_page.text
     assert "id=\"structure-payload\"" in structure_page.text
     assert "id=\"linkCheckRun\"" in structure_page.text
     assert "id=\"externalMode\"" in structure_page.text

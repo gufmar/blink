@@ -26,6 +26,29 @@ class PlaywrightLinkCheckerConfig:
     save_failure_screenshot: bool = False
 
 
+def _playwright_transport_died(exc: BaseException) -> bool:
+    """True when the browser/CDP websocket died; session must be discarded and reopened."""
+    msg = str(exc).lower()
+    return any(
+        needle in msg
+        for needle in (
+            "websocket",
+            "1006",
+            "abnormal closure",
+            "unexpected eof",
+            "connection closed",
+            "econnreset",
+            "broken pipe",
+            "target page, context or browser has been closed",
+            "browser has been closed",
+            "browser closed",
+            "connection reset",
+            "err_connection_reset",
+            "ns_error_connection",
+        )
+    )
+
+
 class PlaywrightLinkChecker:
     """Check links with a shared Playwright browser context."""
 
@@ -88,6 +111,16 @@ class PlaywrightLinkChecker:
                 self._playwright.stop()
                 self._playwright = None
 
+    def _discard_browser_session(self) -> None:
+        """Tear down Playwright after transport loss; tolerates already-broken handles."""
+        try:
+            self.close_session()
+        except Exception:  # noqa: BLE001
+            pass
+        self._context = None
+        self._browser = None
+        self._playwright = None
+
     def _should_block_request(self, request_url: str) -> bool:
         if not self._blocked_netloc_contains:
             return False
@@ -138,10 +171,12 @@ class PlaywrightLinkChecker:
         try:
             page.screenshot(path=str(output_path), full_page=True)
             return filename
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            if _playwright_transport_died(exc):
+                raise
             return None
 
-    def check(self, url: str) -> HttpCheckResult:
+    def _check_one_page(self, url: str) -> HttpCheckResult:
         if self._context is None:
             self.open_session()
         assert self._context is not None
@@ -181,11 +216,14 @@ class PlaywrightLinkChecker:
             if self._network_idle_timeout_ms > 0:
                 try:
                     page.wait_for_load_state("networkidle", timeout=self._network_idle_timeout_ms)
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as net_exc:  # noqa: BLE001
+                    if _playwright_transport_died(net_exc):
+                        raise
             if self._settle_wait_timeout_ms > 0:
                 page.wait_for_timeout(self._settle_wait_timeout_ms)
         except Exception as exc:  # noqa: BLE001
+            if _playwright_transport_died(exc):
+                raise
             fallback_error = str(exc)
             err_lower = fallback_error.lower()
             timed_out = "timeout" in err_lower or "timed out" in err_lower
@@ -211,7 +249,11 @@ class PlaywrightLinkChecker:
                 response_headers=response_headers,
                 fallback_error=fallback_error,
             )
-            page.close()
+            try:
+                page.close()
+            except Exception as close_exc:  # noqa: BLE001
+                if _playwright_transport_died(close_exc):
+                    raise
 
         check_meta = self._meta(
             wait_until=self._wait_until,
@@ -224,3 +266,26 @@ class PlaywrightLinkChecker:
             screenshot_file=screenshot_file,
             check_meta=check_meta,
         )
+
+    def check(self, url: str) -> HttpCheckResult:
+        """Check URL; on CDP/websocket loss discard the session once and retry the same URL."""
+        for attempt in range(2):
+            try:
+                return self._check_one_page(url)
+            except Exception as exc:  # noqa: BLE001
+                if not _playwright_transport_died(exc):
+                    raise
+                self._discard_browser_session()
+                if attempt == 1:
+                    return HttpCheckResult(
+                        status_code=None,
+                        ok=False,
+                        error_message=str(exc),
+                        screenshot_file=None,
+                        check_meta=self._meta(
+                            wait_until=self._wait_until,
+                            transport_error=True,
+                            transport_retry_exhausted=True,
+                        ),
+                    )
+        raise RuntimeError("unreachable")  # pragma: no cover

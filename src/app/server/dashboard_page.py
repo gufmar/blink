@@ -808,7 +808,7 @@ def render_results_structure_html(
     {selector_html}
     {external_selector_html}
   </div>
-  <div id="radial-tree" style="width: 100%; overflow: auto; padding: 0 0.5rem 1rem 0.5rem;"></div>
+  <div id="radial-tree" style="width: 100%; height: 72vh; min-height: 420px; max-height: 960px; overflow: hidden; border-radius: 6px; border: 1px solid #e2e8f0; background: #f8fafc; touch-action: none;"></div>
   <div id="node-popover" class="panel" style="margin: 0.75rem 1rem 1rem 1rem; display: none;">
     <div class="panel-head">Node details</div>
     <div id="node-popover-content" style="padding: 0.75rem 1rem;"></div>
@@ -820,6 +820,7 @@ def render_results_structure_html(
 (() => {{
   const payloadEl = document.getElementById("structure-payload");
   const payload = JSON.parse(payloadEl ? payloadEl.textContent : "{{}}");
+  const pageContentApi = payload.page_content_api || null;
   const host = document.getElementById("radial-tree");
   const popover = document.getElementById("node-popover");
   const popoverContent = document.getElementById("node-popover-content");
@@ -829,11 +830,126 @@ def render_results_structure_html(
   const externalMode = document.getElementById("externalMode");
   const width = 1000;
   const radius = width / 2;
+  let zoomState = d3.zoomIdentity;
+  let clickTimer = null;
 
   function flatten(node, out = []) {{
     out.push(node);
     (node.children || []).forEach((child) => flatten(child, out));
     return out;
+  }}
+
+  function escHtml(value) {{
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }}
+
+  function buildPageContentFetchUrl(nodeUrl) {{
+    if (!pageContentApi || !pageContentApi.href || !nodeUrl) return null;
+    const u = new URL(pageContentApi.href, window.location.origin);
+    u.searchParams.set("url", nodeUrl);
+    if (pageContentApi.task_type) u.searchParams.set("task_type", String(pageContentApi.task_type));
+    if (pageContentApi.link_check_run_id != null && pageContentApi.link_check_run_id !== "") {{
+      u.searchParams.set("link_check_run_id", String(pageContentApi.link_check_run_id));
+    }}
+    return u.pathname + u.search;
+  }}
+
+  function pathRowHtml(url, fullPath) {{
+    const raw = (url && String(url).trim()) || (fullPath && String(fullPath)) || "/";
+    if (/^https?:\\/\\//i.test(raw)) {{
+      return `<div><strong>URL:</strong> <a href="${{escHtml(raw)}}" target="_blank" rel="noopener noreferrer" class="mono">${{escHtml(raw)}}</a></div>`;
+    }}
+    return `<div><strong>Path:</strong> <span class="mono">${{escHtml(raw)}}</span></div>`;
+  }}
+
+  function canLoadPageContent(d) {{
+    const kind = d.data.node_kind || "";
+    if (kind !== "internal_page" && kind !== "internal_root") return false;
+    const url = (d.data.url && String(d.data.url).trim()) || "";
+    return Boolean(pageContentApi && pageContentApi.href && url && /^https?:\\/\\//i.test(url));
+  }}
+
+  function showNodeDetails(d) {{
+    const url = d.data.url || "";
+    const kind = d.data.node_kind || "internal";
+    const detailsLink = d.data.details_url ? `<a href="${{escHtml(d.data.details_url)}}">Open run details</a>` : "";
+    const collapsedState = d.data._children && d.data._children.length > 0 ? "collapsed" : "expanded";
+    const showContent = canLoadPageContent(d);
+    const contentSection = showContent
+      ? `<div style="margin-top: 0.6rem;">
+          <button type="button" id="structureShowContentBtn">Show content</button>
+          <div id="structureContentStatus" style="margin-top: 0.35rem; font-size: 12px; color: #64748b;"></div>
+          <pre id="structurePageContent" style="display:none; margin-top: 0.5rem; padding: 0.6rem; max-height: 40vh; overflow: auto; white-space: pre-wrap; word-break: break-word; background: #0f172a0a; border-radius: 6px; font-size: 12px;"></pre>
+        </div>`
+      : "";
+    popoverContent.innerHTML = `
+      ${{pathRowHtml(url, d.data.full_path)}}
+      <div><strong>Node kind:</strong> <span class="mono">${{escHtml(kind)}}</span></div>
+      <div><strong>External links:</strong> <span class="mono">${{escHtml(d.data.external_count || 0)}}</span></div>
+      <div><strong>Failed links:</strong> <span class="mono">${{escHtml(d.data.failed_count || 0)}}</span></div>
+      <div><strong>Ignored links:</strong> <span class="mono">${{escHtml(d.data.ignored_count || 0)}}</span></div>
+      <div><strong>Node state:</strong> <span class="mono">${{escHtml(collapsedState)}}</span></div>
+      <div><strong>Status:</strong> <span class="mono">${{escHtml(d.data.ok === false ? "failed" : "ok")}}</span></div>
+      <div style="margin-top: 0.4rem;">${{detailsLink}}</div>
+      ${{contentSection}}
+    `;
+    popover.style.display = "block";
+    const btn = document.getElementById("structureShowContentBtn");
+    const out = document.getElementById("structurePageContent");
+    const st = document.getElementById("structureContentStatus");
+    if (btn && out && st) {{
+      btn.addEventListener("click", async () => {{
+        const fetchPath = buildPageContentFetchUrl(String(url).trim());
+        if (!fetchPath) return;
+        st.textContent = "Loading…";
+        btn.disabled = true;
+        try {{
+          const res = await fetch(fetchPath, {{ credentials: "same-origin" }});
+          const body = await res.json().catch(() => ({{}}));
+          if (!res.ok) {{
+            st.textContent = res.status === 400 ? "Invalid request." : "Could not load content.";
+            return;
+          }}
+          if (body.main_text == null || body.main_text === "") {{
+            st.textContent = "No stored text for this page in this run (enable main text extraction in the job).";
+            out.style.display = "none";
+            return;
+          }}
+          st.textContent = body.truncated ? "Showing first portion of stored text (truncated)." : "";
+          out.textContent = String(body.main_text);
+          out.style.display = "block";
+        }} catch (e) {{
+          st.textContent = "Network error while loading content.";
+        }} finally {{
+          btn.disabled = false;
+        }}
+      }}, false);
+    }}
+  }}
+
+  function toggleCollapse(d) {{
+    if (d.data.children && d.data.children.length > 0) {{
+      d.data._children = d.data.children;
+      d.data.children = [];
+    }} else if (d.data._children && d.data._children.length > 0) {{
+      d.data.children = d.data._children;
+      d.data._children = [];
+    }}
+  }}
+
+  function nodeHasToggle(d) {{
+    const vis = d.data.children && d.data.children.length > 0;
+    const hid = d.data._children && d.data._children.length > 0;
+    return vis || hid;
+  }}
+
+  function nodeIsCollapsed(d) {{
+    return Boolean(d.data._children && d.data._children.length > 0 && !(d.data.children && d.data.children.length > 0));
   }}
 
   function render() {{
@@ -853,11 +969,14 @@ def render_results_structure_html(
 
     const svg = d3.create("svg")
       .attr("viewBox", [-radius, -radius, width, width])
-      .attr("width", width)
-      .attr("height", width)
-      .style("font", "11px sans-serif");
+      .attr("width", "100%")
+      .attr("height", "100%")
+      .style("font", "11px sans-serif")
+      .style("display", "block");
 
-    svg.append("g")
+    const chartLayer = svg.append("g").attr("class", "chart-layer");
+
+    chartLayer.append("g")
       .attr("fill", "none")
       .attr("stroke", "#cbd5e1")
       .attr("stroke-opacity", 0.8)
@@ -866,43 +985,36 @@ def render_results_structure_html(
       .join("path")
       .attr("d", d3.linkRadial().angle((d) => d.x).radius((d) => d.y));
 
-    const node = svg.append("g")
+    const node = chartLayer.append("g")
       .selectAll("g")
       .data(root.descendants())
       .join("g")
-      .attr("transform", (d) => `rotate(${{(d.x * 180 / Math.PI) - 90}}) translate(${{d.y}},0)`);
+      .attr("transform", (d) => `rotate(${{(d.x * 180 / Math.PI) - 90}}) translate(${{d.y}},0)`)
+      .style("cursor", "pointer");
 
-    node.append("circle")
-      .attr("r", (d) => sizeBy.value === "fixed" ? 4 : sizeScale(d.data[keyForSize] || 0))
-      .attr("fill", (d) => colorScale(d.data[key] || 0))
-      .attr("stroke", "#1e293b")
-      .attr("stroke-width", 0.6)
-      .style("cursor", "pointer")
-      .on("click", (_event, d) => {{
-        if (d.data.children && d.data.children.length > 0) {{
-          d.data._children = d.data.children;
-          d.data.children = [];
-        }} else if (d.data._children && d.data._children.length > 0) {{
-          d.data.children = d.data._children;
-          d.data._children = [];
-        }}
-        const url = d.data.url || d.data.full_path || "/";
-        const kind = d.data.node_kind || "internal";
-        const detailsLink = d.data.details_url ? `<a href="${{d.data.details_url}}">Open run details</a>` : "";
-        const collapsedState = d.data._children && d.data._children.length > 0 ? "collapsed" : "expanded";
-        popoverContent.innerHTML = `
-          <div><strong>Path:</strong> <span class="mono">${{url}}</span></div>
-          <div><strong>Node kind:</strong> <span class="mono">${{kind}}</span></div>
-          <div><strong>External links:</strong> <span class="mono">${{d.data.external_count || 0}}</span></div>
-          <div><strong>Failed links:</strong> <span class="mono">${{d.data.failed_count || 0}}</span></div>
-          <div><strong>Ignored links:</strong> <span class="mono">${{d.data.ignored_count || 0}}</span></div>
-          <div><strong>Node state:</strong> <span class="mono">${{collapsedState}}</span></div>
-          <div><strong>Status:</strong> <span class="mono">${{d.data.ok === false ? "failed" : "ok"}}</span></div>
-          <div style="margin-top: 0.4rem;">${{detailsLink}}</div>
-        `;
-        popover.style.display = "block";
-        render();
-      }});
+    node.each(function(d) {{
+      const g = d3.select(this);
+      const r = sizeBy.value === "fixed" ? 4 : sizeScale(d.data[keyForSize] || 0);
+      const collapsed = nodeIsCollapsed(d);
+      const toggleable = nodeHasToggle(d);
+      g.selectAll(".node-shape").remove();
+      const shape = g.append("g").attr("class", "node-shape");
+      if (toggleable && collapsed) {{
+        shape.append("text")
+          .attr("text-anchor", "middle")
+          .attr("dy", "0.35em")
+          .attr("fill", "#0f172a")
+          .style("font-size", `${{Math.max(11, r * 2.4)}}px`)
+          .style("font-weight", "700")
+          .text("+");
+      }} else {{
+        shape.append("circle")
+          .attr("r", r)
+          .attr("fill", () => colorScale(d.data[key] || 0))
+          .attr("stroke", "#1e293b")
+          .attr("stroke-width", 0.6);
+      }}
+    }});
 
     node.append("text")
       .attr("dy", "0.31em")
@@ -912,6 +1024,38 @@ def render_results_structure_html(
       .text((d) => (d.data.node_kind === "external_domain" ? `@${{d.data.name || ""}}` : (d.data.name || "/")))
       .clone(true).lower()
       .attr("stroke", "white");
+
+    const zoom = d3.zoom()
+      .scaleExtent([0.12, 14])
+      .filter((event) => (!event.ctrlKey || event.type === "wheel") && !event.button && event.type !== "dblclick")
+      .on("zoom", (event) => {{
+        zoomState = event.transform;
+        chartLayer.attr("transform", event.transform);
+      }});
+
+    svg.call(zoom).on("dblclick.zoom", null);
+    svg.call(zoom.transform, zoomState);
+
+    node.on("click", (event, d) => {{
+      event.stopPropagation();
+      if (clickTimer) window.clearTimeout(clickTimer);
+      clickTimer = window.setTimeout(() => {{
+        clickTimer = null;
+        showNodeDetails(d);
+      }}, 280);
+    }});
+
+    node.on("dblclick", (event, d) => {{
+      event.preventDefault();
+      event.stopPropagation();
+      if (clickTimer) {{
+        window.clearTimeout(clickTimer);
+        clickTimer = null;
+      }}
+      if (!nodeHasToggle(d)) return;
+      toggleCollapse(d);
+      render();
+    }});
 
     host.append(svg.node());
   }}
