@@ -142,7 +142,8 @@
       "network_idle_seconds": 4,
       "settle_wait_seconds": 2,
       "wait_until": "commit",
-      "accept_partial_success_on_navigation_timeout": true
+      "accept_partial_success_on_navigation_timeout": true,
+      "restart_browser_every_n_checks": 0
     },
     "preflight": {
       "enabled": true,

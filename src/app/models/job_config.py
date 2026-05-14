@@ -118,6 +118,8 @@ class LinkCheckPlaywrightConfig(TypedDict):
     settle_wait_seconds: int
     wait_until: Literal["commit", "domcontentloaded"]
     accept_partial_success_on_navigation_timeout: bool
+    #: After this many Playwright link checks, restart Chromium. 0 = never (default).
+    restart_browser_every_n_checks: int
 
 
 class LinkCheckPreflightConfig(TypedDict):

@@ -254,3 +254,45 @@ def test_playwright_checker_returns_failure_after_two_transport_losses() -> None
     assert "1006" in (result.error_message or "")
     assert result.check_meta is not None
     assert "transport_retry_exhausted" in result.check_meta
+
+
+def test_playwright_periodic_browser_restart_calls_close_session() -> None:
+    page = _FakePage(response=_FakeResponse(200))
+    cfg = PlaywrightLinkCheckerConfig(
+        navigation_timeout_seconds=5,
+        network_idle_seconds=0,
+        settle_wait_seconds=0,
+        wait_until="commit",
+        accept_partial_success_on_navigation_timeout=False,
+        artifacts_dir=None,
+        save_failure_screenshot=False,
+        restart_browser_every_n_checks=2,
+    )
+    checker = PlaywrightLinkChecker(
+        browser_settings=BrowserSettings(
+            user_agent="Blink/3.0",
+            viewport=BrowserViewport(width=1200, height=800),
+            locale="en-US",
+            timezone_id="UTC",
+            extra_http_headers={},
+            storage_state_path=None,
+            persist_storage_state=False,
+            headless=True,
+            block_request_netloc_contains=[],
+        ),
+        config=cfg,
+    )
+    checker._context = _FakeContext(page)
+    closes: list[int] = []
+    real_close = checker.close_session
+
+    def wrapped_close() -> None:
+        closes.append(1)
+        real_close()
+
+    checker.close_session = wrapped_close  # type: ignore[method-assign]
+
+    assert checker.check("https://a.example").ok is True
+    assert closes == []
+    assert checker.check("https://b.example").ok is True
+    assert len(closes) == 1

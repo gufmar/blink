@@ -418,6 +418,12 @@
         "accept_partial_success_on_navigation_timeout": {
           "type": "boolean",
           "default": true
+        },
+        "restart_browser_every_n_checks": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "After this many completed Playwright link checks, close and reopen the browser (0 = disabled)."
         }
       }
     },

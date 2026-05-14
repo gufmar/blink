@@ -74,6 +74,7 @@ def _build_link_checker(config: JobConfig, *, artifacts_dir: Path):
                 accept_partial_success_on_navigation_timeout=pw_cfg["accept_partial_success_on_navigation_timeout"],
                 artifacts_dir=artifacts_dir,
                 save_failure_screenshot=lc["save_failure_screenshot"],
+                restart_browser_every_n_checks=int(pw_cfg.get("restart_browser_every_n_checks") or 0),
             ),
         )
 

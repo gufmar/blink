@@ -97,6 +97,7 @@ URL behavior is split by concern:
 - `link_check.playwright.wait_until`: `commit` (default, fewer false timeouts on slow DOM) or `domcontentloaded`.
 - `link_check.playwright.accept_partial_success_on_navigation_timeout`: when `true` (default), if Playwright times out but the main document already returned HTTP 2xx, the link is treated as OK.
 - `link_check.playwright.navigation_timeout_seconds|network_idle_seconds|settle_wait_seconds` tunes timing.
+- `link_check.playwright.restart_browser_every_n_checks`: after this many completed Playwright checks, Blink closes and reopens Chromium (`0` = never, the default). Use on large jobs to limit memory growth and flaky CDP connections.
 - `link_check.preflight`: optional HEAD/GET classification to skip Playwright for archives and other non-HTML responses (`skip_playwright_content_types`, `skip_playwright_path_extensions`).
 - `link_check.hybrid`: used by `http_then_playwright` — `retry_playwright_http_status` (e.g. 403/429/503), `retry_playwright_on_connection_error`, when to run Playwright after preflight sees HTML vs unknown `Content-Type`.
 
@@ -110,7 +111,8 @@ Example:
     "network_idle_seconds": 4,
     "settle_wait_seconds": 2,
     "wait_until": "commit",
-    "accept_partial_success_on_navigation_timeout": true
+    "accept_partial_success_on_navigation_timeout": true,
+    "restart_browser_every_n_checks": 0
   },
   "preflight": { "enabled": true, "skip_playwright_content_types": [], "skip_playwright_path_extensions": [] },
   "hybrid": {

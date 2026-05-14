@@ -24,6 +24,8 @@ class PlaywrightLinkCheckerConfig:
     accept_partial_success_on_navigation_timeout: bool
     artifacts_dir: Path | None = None
     save_failure_screenshot: bool = False
+    #: After this many completed Playwright checks, close and reopen the browser. 0 = disabled.
+    restart_browser_every_n_checks: int = 0
 
 
 def _playwright_transport_died(exc: BaseException) -> bool:
@@ -69,6 +71,7 @@ class PlaywrightLinkChecker:
         self._playwright: Any = None
         self._browser: Any = None
         self._context: Any = None
+        self._checks_since_browser_birth: int = 0
 
     def open_session(self) -> None:
         if self._context is not None:
@@ -110,6 +113,7 @@ class PlaywrightLinkChecker:
             if self._playwright is not None:
                 self._playwright.stop()
                 self._playwright = None
+            self._checks_since_browser_birth = 0
 
     def _discard_browser_session(self) -> None:
         """Tear down Playwright after transport loss; tolerates already-broken handles."""
@@ -120,6 +124,7 @@ class PlaywrightLinkChecker:
         self._context = None
         self._browser = None
         self._playwright = None
+        self._checks_since_browser_birth = 0
 
     def _should_block_request(self, request_url: str) -> bool:
         if not self._blocked_netloc_contains:
@@ -267,17 +272,32 @@ class PlaywrightLinkChecker:
             check_meta=check_meta,
         )
 
+    def _after_check_complete_maybe_restart_browser(self) -> None:
+        """Proactively tear down Chromium after N checks to cap memory / CDP drift (configurable)."""
+        limit = int(self._config.restart_browser_every_n_checks)
+        if limit <= 0:
+            return
+        self._checks_since_browser_birth += 1
+        if self._checks_since_browser_birth < limit:
+            return
+        try:
+            self.close_session()
+        except Exception:  # noqa: BLE001
+            self._discard_browser_session()
+
     def check(self, url: str) -> HttpCheckResult:
         """Check URL; on CDP/websocket loss discard the session once and retry the same URL."""
+        result: HttpCheckResult | None = None
         for attempt in range(2):
             try:
-                return self._check_one_page(url)
+                result = self._check_one_page(url)
+                break
             except Exception as exc:  # noqa: BLE001
                 if not _playwright_transport_died(exc):
                     raise
                 self._discard_browser_session()
                 if attempt == 1:
-                    return HttpCheckResult(
+                    result = HttpCheckResult(
                         status_code=None,
                         ok=False,
                         error_message=str(exc),
@@ -288,4 +308,7 @@ class PlaywrightLinkChecker:
                             transport_retry_exhausted=True,
                         ),
                     )
-        raise RuntimeError("unreachable")  # pragma: no cover
+        if result is None:
+            raise RuntimeError("unreachable")  # pragma: no cover
+        self._after_check_complete_maybe_restart_browser()
+        return result
