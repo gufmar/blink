@@ -2192,8 +2192,12 @@ class CrawlRepository:
 
     def get_distinct_link_counts(self) -> dict[str, int]:
         """Distinct target URLs by internal vs external (across all runs in this DB)."""
-        ext = self._connection.execute("SELECT COUNT(*) AS n FROM external_links").fetchone()
-        internal = self._connection.execute("SELECT COUNT(*) AS n FROM pages").fetchone()
+        zero = {"external_urls_distinct": 0, "internal_urls_distinct": 0}
+        try:
+            ext = self._connection.execute("SELECT COUNT(*) AS n FROM external_links").fetchone()
+            internal = self._connection.execute("SELECT COUNT(*) AS n FROM pages").fetchone()
+        except sqlite3.Error:
+            return zero
         return {
             "external_urls_distinct": int(ext["n"]) if ext else 0,
             "internal_urls_distinct": int(internal["n"]) if internal else 0,
