@@ -371,3 +371,38 @@ def test_run_link_check_stops_early_when_max_reportable_reached(tmp_path: Path) 
     assert checker.call_count("https://b.example") == 0
     assert checker.call_count("https://c.example") == 0
     connection.close()
+
+
+def test_run_link_check_defaults_to_latest_completed_crawl(tmp_path: Path) -> None:
+    """When the newest crawl row is still in progress, default run_id=None uses the last finished crawl."""
+    connection = connect_sqlite(tmp_path / "crawl_default_completed.db")
+    initialize_schema(connection)
+    repo = CrawlRepository(connection)
+    run1 = repo.create_run("cardano.org")
+    repo.add_link(
+        run_id=run1,
+        source_url="https://cardano.org",
+        target_url="https://stable.example",
+        is_internal=False,
+    )
+    repo.finish_run(run1, pages_visited=1, pages_failed=0, links_discovered=1)
+    _run2_in_progress = repo.create_run("cardano.org")
+
+    config = load_effective_job_config("jobs/cardano.org.job.json", cwd=Path.cwd())
+    config["meta"]["job_id"] = "cardano.org"
+    config["link_check"]["enabled"] = True
+    config["link_check"]["retry_count"] = 0
+
+    checker = FakeChecker(
+        {"https://stable.example": [HttpCheckResult(status_code=200, ok=True, error_message=None)]}
+    )
+
+    summary = run_link_check(
+        config=config,
+        repository=repo,
+        checker=checker,
+        run_id=None,
+    )
+    assert summary.crawl_run_id == run1
+    assert summary.checked == 1
+    connection.close()

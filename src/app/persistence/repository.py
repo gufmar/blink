@@ -405,6 +405,22 @@ class CrawlRepository:
             return None
         return int(row["id"])
 
+    def get_latest_completed_run_id(self, job_id: str) -> int | None:
+        """Most recent crawl run with ``finished_at`` set (not in progress)."""
+        row = self._connection.execute(
+            """
+            SELECT id
+            FROM crawl_runs
+            WHERE job_id = ? AND finished_at IS NOT NULL
+            ORDER BY started_at DESC, id DESC
+            LIMIT 1
+            """,
+            (job_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return int(row["id"])
+
     def get_previous_run_id(self, job_id: str, run_id: int) -> int | None:
         row = self._connection.execute(
             """

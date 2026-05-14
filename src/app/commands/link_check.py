@@ -636,7 +636,11 @@ def show(
 def run(
     job: str = typer.Option(..., "--job", help="Path to job JSON file."),
     db: Path | None = typer.Option(None, "--db", help="SQLite DB path override."),
-    run_id: int | None = typer.Option(None, "--run-id", help="Optional crawl run id to check."),
+    run_id: int | None = typer.Option(
+        None,
+        "--run-id",
+        help="Optional crawl run id to check; defaults to the latest completed crawl run.",
+    ),
     limit: int | None = typer.Option(None, "--limit", help="Optional max number of links to check."),
     show_live_failures: bool = typer.Option(
         True,
@@ -696,7 +700,9 @@ def run(
         open_session = getattr(checker, "open_session", None)
         if callable(open_session):
             open_session()
-        selected_run_id = run_id if run_id is not None else repository.get_latest_run_id(config["meta"]["job_id"])
+        selected_run_id = (
+            run_id if run_id is not None else repository.get_latest_completed_run_id(config["meta"]["job_id"])
+        )
         link_check_run_id: int | None = None
         source_refs_by_target: dict[str, list[dict[str, str | None]]] = {}
         preexisting_reportable_targets: set[str] = set()
@@ -770,8 +776,12 @@ def run(
             status.update("Link-check finished")
 
     if summary.crawl_run_id is None:
-        typer.secho("No crawl run found for this job. Run `blink crawl run` first.", fg=typer.colors.YELLOW)
-        event_logger("linkcheck.no_crawl_run").warning("No crawl run found for this job.")
+        typer.secho(
+            "No completed crawl run found for this job. If a crawl is still running, wait for it to finish; "
+            "otherwise run `blink crawl run` first.",
+            fg=typer.colors.YELLOW,
+        )
+        event_logger("linkcheck.no_crawl_run").warning("No completed crawl run found for this job.")
         return
 
     typer.secho(

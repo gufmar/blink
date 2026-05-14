@@ -117,7 +117,7 @@ def run_link_check(
     status_hook: Callable[[str], None] | None = None,
     result_hook: Callable[[str, HttpCheckResult], None] | None = None,
 ) -> LinkCheckSummary:
-    """Execute link checks for latest or selected crawl run."""
+    """Execute link checks for the latest completed crawl run or a selected run."""
     if not config["link_check"]["enabled"]:
         return LinkCheckSummary(
             link_check_run_id=link_check_run_id,
@@ -133,7 +133,9 @@ def run_link_check(
             failure_samples=[],
         )
 
-    crawl_run_id = run_id if run_id is not None else repository.get_latest_run_id(config["meta"]["job_id"])
+    crawl_run_id = (
+        run_id if run_id is not None else repository.get_latest_completed_run_id(config["meta"]["job_id"])
+    )
     if crawl_run_id is None:
         return LinkCheckSummary(
             link_check_run_id=link_check_run_id,

@@ -246,3 +246,21 @@ def test_list_ignore_rule_impacts_matches_latest_run_links(tmp_path) -> None:
         "https://sub.group.example/b",
     }
     connection.close()
+
+
+def test_get_latest_completed_run_id_skips_in_progress(tmp_path) -> None:
+    connection = connect_sqlite(tmp_path / "completed-latest.db")
+    initialize_schema(connection)
+    repo = CrawlRepository(connection)
+
+    run1 = repo.create_run("job-1")
+    repo.finish_run(run1, pages_visited=0, pages_failed=0, links_discovered=0)
+    run2 = repo.create_run("job-1")
+
+    assert repo.get_latest_run_id("job-1") == run2
+    assert repo.get_latest_completed_run_id("job-1") == run1
+
+    repo.finish_run(run2, pages_visited=0, pages_failed=0, links_discovered=0)
+    assert repo.get_latest_completed_run_id("job-1") == run2
+
+    connection.close()
