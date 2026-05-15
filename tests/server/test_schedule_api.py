@@ -45,8 +45,9 @@ def test_dashboard_ok(tmp_path: Path) -> None:
     assert "Blink schedules" in r.text
     assert "/api/schedule" in r.text
     assert "/dashboard/results" in r.text
-    assert "job-card-scroll" in r.text
-    assert "line-status-col" in r.text
+    assert "panel-scroll" in r.text
+    assert "line-dot" in r.text
+    assert "job-history-link" in r.text
 
 
 def test_dashboard_shows_last_run_when_schedule_disabled(tmp_path: Path) -> None:
@@ -95,8 +96,9 @@ def test_dashboard_shows_last_run_when_schedule_disabled(tmp_path: Path) -> None
     assert "last check" in page.text
     assert f"/dashboard/results/zzz/runs/{run_id}?task_type=crawl" in page.text
     assert f"/dashboard/results/zzz/runs/{lc_id}?task_type=link_check" in page.text
-    assert "next crawl" not in page.text
-    assert "next check" not in page.text
+    assert "not scheduled" in page.text
+    assert "crawls" not in page.text
+    assert "link-checks" not in page.text
 
 
 def test_dashboard_links_honor_proxy_root_path(tmp_path: Path) -> None:
