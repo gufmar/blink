@@ -18,6 +18,15 @@ def _html_log_links_cell(run: dict[str, Any]) -> str:
     )
 
 
+def _auth_nav_html(links: dict[str, str]) -> str:
+    user = str(links.get("auth_user") or "").strip()
+    logout = str(links.get("auth_logout") or "").strip()
+    if not user and not logout:
+        return ""
+    logout_link = f' · <a href="{html.escape(logout)}">Log out</a>' if logout else ""
+    return f'<span class="auth-user">Signed in as {html.escape(user)}</span>{logout_link}'
+
+
 def _html_report_link_cell(run: dict[str, Any]) -> str:
     url = str(run.get("report_url") or "").strip()
     if not url:
@@ -420,6 +429,7 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
         <a href="{esc(links.get("schedule_json", ""))}">Schedule JSON</a>
         <a href="{esc(links.get("slack_health", ""))}">Slack health</a>
         <a href="{esc(links.get("results_index", ""))}">Results</a>
+        {_auth_nav_html(links)}
       </nav>
     </div>
   </header>
@@ -1391,6 +1401,9 @@ def _render_results_shell(
 ) -> str:
     branding_links = branding_links or {}
     nav_html = "\n".join(f'<a href="{esc(href)}">{esc(label)}</a>' for label, href in nav_links if href)
+    auth_html = _auth_nav_html(branding_links)
+    if auth_html:
+        nav_html = f"{nav_html}\n{auth_html}" if nav_html else auth_html
     headers_html = "".join(f"<th>{esc(h)}</th>" for h in table_headers)
     gen_at = datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
     return f"""<!DOCTYPE html>
@@ -1461,6 +1474,7 @@ def _shared_styles() -> str:
   .nav { margin-top: 1rem; display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; font-size: 0.875rem; }
   .nav a { color: #fff; opacity: 0.95; text-decoration: underline; text-underline-offset: 3px; }
   .nav a:hover { opacity: 1; }
+  .auth-user { opacity: 0.9; margin-left: 0.5rem; }
   .wrap { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
   .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; margin-bottom: 1rem; }
   .metric { background: var(--card); border-radius: var(--radius); padding: 1.15rem 1.25rem; box-shadow: var(--shadow); border: 1px solid var(--border); }

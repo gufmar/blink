@@ -29,6 +29,23 @@ def _iso_utc_z() -> str:
     return datetime.now(tz=UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _job_next_run_time(job: Any, *, now: datetime | None = None) -> datetime | None:
+    """Next run for an APScheduler job (works before the scheduler thread is started)."""
+    if job is None:
+        return None
+    now = now or datetime.now(tz=UTC)
+    next_run = getattr(job, "next_run_time", None)
+    if next_run is not None:
+        return next_run
+    trigger = getattr(job, "trigger", None)
+    if trigger is None:
+        return None
+    try:
+        return trigger.get_next_fire_time(None, now)
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
 def _parse_iso_utc(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -249,7 +266,7 @@ class BlinkSchedulerService:
                 tt: TaskType = task_type  # type: ignore[assignment]
                 ap_id = self._job_ap_id(cfg["meta"]["job_id"], tt)
                 job = self._scheduler.get_job(ap_id)
-                next_run = job.next_run_time if job is not None else None
+                next_run = _job_next_run_time(job)
                 next_iso = None
                 if next_run is not None:
                     if next_run.tzinfo is None:

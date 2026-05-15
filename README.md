@@ -173,6 +173,67 @@ Each job’s `schedule` section defines **crawl** and **link-check** tasks (inte
 
 Maintenance windows (`schedule.maintenance_windows`) use standard five-field cron strings in `schedule.timezone`. Overlap policy **`skip`** is implemented: if a task is still running, the next tick is skipped.
 
+## Web UI authentication
+
+When enabled, `/dashboard` and `/api/*` require a signed session cookie. Slack webhook routes (`/notifications/slack/*`) stay on signing-secret verification only.
+
+User accounts and per-job roles live in `<jobs-root>/.blink/server.sqlite` (separate from per-job crawl DBs and `scheduler.sqlite`).
+
+### Enable auth
+
+```bash
+export BLINK_AUTH_PASSWORD=1          # email + password login
+# export BLINK_AUTH_GOOGLE=1          # optional Google Workspace OIDC
+export BLINK_SESSION_SECRET="$(openssl rand -hex 32)"
+export BLINK_PUBLIC_BASE_URL="http://127.0.0.1:8080"   # used in setup/reset links and Google redirect URI
+```
+
+Google (optional):
+
+```bash
+export BLINK_AUTH_GOOGLE=1
+export BLINK_GOOGLE_CLIENT_ID="..."
+export BLINK_GOOGLE_CLIENT_SECRET="..."
+export BLINK_GOOGLE_ALLOWED_HD="yourcompany.com"   # Workspace hosted domain
+```
+
+Register redirect URI: `{BLINK_PUBLIC_BASE_URL}/auth/google/callback`
+
+SMTP (optional — otherwise CLI prints one-time setup/reset tokens):
+
+```bash
+export BLINK_SMTP_HOST=smtp.example.com
+export BLINK_SMTP_PORT=587
+export BLINK_SMTP_USER=...
+export BLINK_SMTP_PASSWORD=...
+export BLINK_SMTP_FROM="blink@example.com"
+```
+
+### Bootstrap first admin (before enabling auth on production)
+
+```bash
+blink user add admin@yourcompany.com --global-admin --jobs-root jobs
+# note the one-time setup URL/token, set password via /auth/set-password
+```
+
+### User CLI
+
+```bash
+blink user list [--jobs-root <dir>]
+blink user add <email> [--global-admin]
+blink user delete <email>
+blink user set-password <email> --password ...
+blink user reset-token <email>
+blink user set-global-admin <email> [--enabled/--disabled]
+blink user set-job-role <email> <job_id> watcher|solver|job_admin
+blink user clear-job-role <email> <job_id>
+blink user link-slack <email> <slack_user_id>
+```
+
+Roles: **watcher** (read dashboards), **solver** and **job_admin** (reserved for future write actions; read access today), **global admin** (all jobs). One role per job per user.
+
+Rate limiting: `BLINK_AUTH_LOGIN_MAX_ATTEMPTS` (default 8) per IP per `BLINK_AUTH_LOGIN_WINDOW_SECONDS` (default 900). In-memory per process only.
+
 ## DB Inspection + Explore (Step 5)
 
 Show recent job run history:

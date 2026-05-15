@@ -13,11 +13,21 @@ from typing import Any, Literal
 from urllib.parse import unquote, urlencode, urlsplit
 
 from starlette.applications import Starlette
+from starlette.middleware.sessions import SessionMiddleware
 from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+from app.auth.access import require_job_access
+from app.auth.config import AuthConfig
+from app.auth.middleware import AuthMiddleware
+from app.auth.permissions import (
+    filter_jobs_for_access,
+    filter_schedule_tasks,
+    load_effective_access,
+)
+from app.auth.rate_limit import LoginRateLimiter
 from app.config.loader import load_effective_job_config, project_root
 from app.config.schema import validate_job_config
 from app.models.job_config import JobConfig
@@ -32,6 +42,7 @@ from app.persistence.repository import CrawlRepository
 from app.persistence.sqlite import connect_sqlite, initialize_schema
 from app.runtime.job_paths import build_job_paths
 from app.schedule.service import BlinkSchedulerService
+from app.server.auth_routes import auth_route_handlers
 from app.server.dashboard_page import (
     render_job_task_history_html,
     render_results_job_html,
@@ -52,9 +63,43 @@ async def health(_: Request) -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
 
+def _disk_job_ids(jobs_root: Path) -> frozenset[str]:
+    ids: set[str] = set()
+    for job_path in sorted(jobs_root.glob("*.job.json")):
+        if job_path.name.startswith("_"):
+            continue
+        stem = job_path.stem
+        ids.add(stem.removesuffix(".job") if stem.endswith(".job") else stem)
+    return frozenset(ids)
+
+
+def _page_links(request: Request, **extra: str) -> dict[str, str]:
+    return {**_branding_links(request), **_auth_nav_links(request), **extra}
+
+
+def _auth_nav_links(request: Request) -> dict[str, str]:
+    cfg: AuthConfig = request.app.state.auth_config
+    if not cfg.any_enabled:
+        return {}
+    prefix = _join_url_paths(
+        _normalize_base_path(getattr(request.app.state, "route_base_path", "")),
+        _normalize_base_path(str(request.scope.get("root_path") or "")),
+    )
+    logout = _join_url_paths(prefix, "/auth/logout") if prefix != "/" else "/auth/logout"
+    login = _join_url_paths(prefix, "/auth/login") if prefix != "/" else "/auth/login"
+    email = str(request.session.get("email") or "")
+    return {"auth_user": email, "auth_logout": logout, "auth_login": login}
+
+
 async def api_schedule(request: Request) -> JSONResponse:
     svc: BlinkSchedulerService = request.app.state.scheduler_service
-    return JSONResponse(svc.build_schedule_payload())
+    jobs_root: Path = request.app.state.jobs_root
+    payload = svc.build_schedule_payload()
+    all_ids = _disk_job_ids(jobs_root)
+    access = load_effective_access(request, all_disk_job_ids=all_ids)
+    if access is not None:
+        payload["tasks"] = filter_schedule_tasks(list(payload.get("tasks") or []), access, all_disk_job_ids=all_ids)
+    return JSONResponse(payload)
 
 
 def _normalize_base_path(value: str | None) -> str:
@@ -548,7 +593,11 @@ async def schedule_dashboard(request: Request) -> HTMLResponse:
     svc: BlinkSchedulerService = request.app.state.scheduler_service
     payload = svc.build_schedule_payload()
     jobs_root: Path = request.app.state.jobs_root
-    jobs = _load_job_entries(jobs_root)
+    all_ids = _disk_job_ids(jobs_root)
+    access = load_effective_access(request, all_disk_job_ids=all_ids)
+    if access is not None:
+        payload["tasks"] = filter_schedule_tasks(list(payload.get("tasks") or []), access, all_disk_job_ids=all_ids)
+    jobs = filter_jobs_for_access(_load_job_entries(jobs_root), access, all_disk_job_ids=all_ids)
     job_meta: dict[str, dict[str, Any]] = {}
     for job in jobs:
         job_id = str(job["job_id"])
@@ -606,7 +655,7 @@ async def schedule_dashboard(request: Request) -> HTMLResponse:
             "slack_health": _path_for(request, "slack_health"),
             "results_index": _path_for(request, "dashboard_results_jobs"),
             "schedule_refresh": _path_for(request, "dashboard_schedule"),
-            **_branding_links(request),
+            **_page_links(request),
         },
     )
     return HTMLResponse(page)
@@ -615,6 +664,9 @@ async def schedule_dashboard(request: Request) -> HTMLResponse:
 async def dashboard_results_job_history(request: Request) -> HTMLResponse:
     jobs_root: Path = request.app.state.jobs_root
     job_id = str(request.path_params["job_id"])
+    denied = require_job_access(request, job_id)
+    if denied is not None:
+        return denied
     job = _job_entry_by_id(jobs_root, job_id)
     if job is None:
         return HTMLResponse("Job not found", status_code=404)
@@ -656,7 +708,7 @@ async def dashboard_results_job_history(request: Request) -> HTMLResponse:
             "main_dashboard": _path_for(request, "dashboard_schedule"),
             "jobs_index": _path_for(request, "dashboard_results_jobs"),
             "refresh": _path_for(request, "dashboard_results_job_history", job_id=job_id),
-            **_branding_links(request),
+            **_page_links(request),
         },
     )
     return HTMLResponse(page)
@@ -664,7 +716,9 @@ async def dashboard_results_job_history(request: Request) -> HTMLResponse:
 
 async def api_results_jobs(request: Request) -> JSONResponse:
     jobs_root: Path = request.app.state.jobs_root
-    jobs = _load_job_entries(jobs_root)
+    all_ids = _disk_job_ids(jobs_root)
+    access = load_effective_access(request, all_disk_job_ids=all_ids)
+    jobs = filter_jobs_for_access(_load_job_entries(jobs_root), access, all_disk_job_ids=all_ids)
     out: list[dict[str, Any]] = []
     task_rows: list[dict[str, Any]] = []
     for job in jobs:
@@ -701,6 +755,9 @@ async def api_results_jobs(request: Request) -> JSONResponse:
 async def api_results_job_runs(request: Request) -> JSONResponse:
     jobs_root: Path = request.app.state.jobs_root
     job_id = str(request.path_params["job_id"])
+    denied = require_job_access(request, job_id)
+    if denied is not None:
+        return denied
     job = _job_entry_by_id(jobs_root, job_id)
     if job is None:
         return _json_error(404, "job_not_found")
@@ -731,6 +788,9 @@ async def api_results_job_runs(request: Request) -> JSONResponse:
 async def api_results_run_detail(request: Request) -> JSONResponse:
     jobs_root: Path = request.app.state.jobs_root
     job_id = str(request.path_params["job_id"])
+    denied = require_job_access(request, job_id)
+    if denied is not None:
+        return denied
     run_id = int(request.path_params["run_id"])
     task_type = str(request.query_params.get("task_type") or "crawl").strip().lower()
     if task_type not in {"crawl", "link_check"}:
@@ -894,6 +954,9 @@ async def api_results_run_detail(request: Request) -> JSONResponse:
 async def api_results_run_structure(request: Request) -> JSONResponse:
     jobs_root: Path = request.app.state.jobs_root
     job_id = str(request.path_params["job_id"])
+    denied = require_job_access(request, job_id)
+    if denied is not None:
+        return denied
     run_id = int(request.path_params["run_id"])
     task_type = str(request.query_params.get("task_type") or "crawl").strip().lower()
     if task_type not in {"crawl", "link_check"}:
@@ -989,6 +1052,9 @@ async def api_results_run_page_main_text(request: Request) -> JSONResponse:
     """Return stored main_text for a page URL in the resolved crawl run (on demand for structure UI)."""
     jobs_root: Path = request.app.state.jobs_root
     job_id = str(request.path_params["job_id"])
+    denied = require_job_access(request, job_id)
+    if denied is not None:
+        return denied
     run_id = int(request.path_params["run_id"])
     task_type = str(request.query_params.get("task_type") or "crawl").strip().lower()
     if task_type not in {"crawl", "link_check"}:
@@ -1028,7 +1094,9 @@ async def api_results_run_page_main_text(request: Request) -> JSONResponse:
 
 async def dashboard_results_jobs(request: Request) -> HTMLResponse:
     jobs_root: Path = request.app.state.jobs_root
-    jobs = _load_job_entries(jobs_root)
+    all_ids = _disk_job_ids(jobs_root)
+    access = load_effective_access(request, all_disk_job_ids=all_ids)
+    jobs = filter_jobs_for_access(_load_job_entries(jobs_root), access, all_disk_job_ids=all_ids)
     rows: list[dict[str, Any]] = []
     for job in jobs:
         job_id = str(job["job_id"])
@@ -1063,7 +1131,7 @@ async def dashboard_results_jobs(request: Request) -> HTMLResponse:
             "jobs_json": _path_for(request, "api_results_jobs"),
             "health": _path_for(request, "health"),
             "refresh": _path_for(request, "dashboard_results_jobs"),
-            **_branding_links(request),
+            **_page_links(request),
         },
     )
     return HTMLResponse(page)
@@ -1072,6 +1140,9 @@ async def dashboard_results_jobs(request: Request) -> HTMLResponse:
 async def _dashboard_job_runs_page(request: Request, *, mode: Literal["all", "crawl", "link_check"]) -> HTMLResponse:
     jobs_root: Path = request.app.state.jobs_root
     job_id = str(request.path_params["job_id"])
+    denied = require_job_access(request, job_id)
+    if denied is not None:
+        return denied
     job = _job_entry_by_id(jobs_root, job_id)
     if job is None:
         return HTMLResponse("Job not found", status_code=404)
@@ -1155,7 +1226,7 @@ async def _dashboard_job_runs_page(request: Request, *, mode: Literal["all", "cr
             ),
             "show_crawl": show_crawl,
             "show_link_check": show_link_check,
-            **_branding_links(request),
+            **_page_links(request),
         },
     )
     return HTMLResponse(page)
@@ -1176,6 +1247,9 @@ async def dashboard_results_job_link_checks(request: Request) -> HTMLResponse:
 async def dashboard_results_job_log(request: Request) -> Response:
     jobs_root: Path = request.app.state.jobs_root
     job_id = str(request.path_params["job_id"])
+    denied = require_job_access(request, job_id)
+    if denied is not None:
+        return denied
     log_date = str(request.path_params["log_date"])
     if _job_entry_by_id(jobs_root, job_id) is None:
         return Response("Job not found", status_code=404)
@@ -1191,6 +1265,9 @@ async def dashboard_results_job_log(request: Request) -> Response:
 async def dashboard_results_job_report(request: Request) -> Response:
     jobs_root: Path = request.app.state.jobs_root
     job_id = str(request.path_params["job_id"])
+    denied = require_job_access(request, job_id)
+    if denied is not None:
+        return denied
     report_file = str(request.path_params["report_file"])
     if _job_entry_by_id(jobs_root, job_id) is None:
         return Response("Job not found", status_code=404)
@@ -1208,6 +1285,9 @@ async def dashboard_results_job_report(request: Request) -> Response:
 async def dashboard_results_run(request: Request) -> HTMLResponse:
     jobs_root: Path = request.app.state.jobs_root
     job_id = str(request.path_params["job_id"])
+    denied = require_job_access(request, job_id)
+    if denied is not None:
+        return denied
     run_id = int(request.path_params["run_id"])
     task_type = str(request.query_params.get("task_type") or "crawl").strip().lower()
     if task_type not in {"crawl", "link_check"}:
@@ -1439,7 +1519,7 @@ async def dashboard_results_run(request: Request) -> HTMLResponse:
                 include_status_q=include_status,
                 include_category_q=include_category,
             ),
-            **_branding_links(request),
+            **_page_links(request),
         },
     )
     return HTMLResponse(page)
@@ -1448,6 +1528,9 @@ async def dashboard_results_run(request: Request) -> HTMLResponse:
 async def dashboard_results_structure(request: Request) -> HTMLResponse:
     jobs_root: Path = request.app.state.jobs_root
     job_id = str(request.path_params["job_id"])
+    denied = require_job_access(request, job_id)
+    if denied is not None:
+        return denied
     run_id = int(request.path_params["run_id"])
     task_type = str(request.query_params.get("task_type") or "crawl").strip().lower()
     if task_type not in {"crawl", "link_check"}:
@@ -1563,7 +1646,7 @@ async def dashboard_results_structure(request: Request) -> HTMLResponse:
             "link_check_options": link_check_options,
             "selected_link_check_id": selected_link_check_run_id,
             "selected_external_mode": external_mode,
-            **_branding_links(request),
+            **_page_links(request),
         },
     )
     return HTMLResponse(page)
@@ -1779,8 +1862,16 @@ def build_app(
         if enable_scheduler:
             scheduler_service.shutdown(wait=True)
 
+    auth_config = AuthConfig.from_env()
+    auth_config.validate_for_startup()
+    auth_route_list = [
+        Route(path, handler, methods=methods, name=name)
+        for path, handler, methods, name in auth_route_handlers()
+    ]
+
     app = Starlette(
         routes=[
+            *auth_route_list,
             Mount("/static", app=StaticFiles(directory=Path(__file__).resolve().parent / "static"), name="static"),
             Route("/health", health, methods=["GET"], name="health"),
             Route("/notifications/slack/health", health, methods=["GET"], name="slack_health"),
@@ -1871,4 +1962,19 @@ def build_app(
     app.state.scheduler_service = scheduler_service
     app.state.enable_scheduler = enable_scheduler
     app.state.route_base_path = _normalize_base_path(route_base_path)
+    app.state.auth_config = auth_config
+    app.state.login_rate_limiter = LoginRateLimiter(
+        max_attempts=auth_config.login_max_attempts,
+        window_seconds=auth_config.login_window_seconds,
+    )
+    if auth_config.session_secret:
+        app.add_middleware(AuthMiddleware)
+        app.add_middleware(
+            SessionMiddleware,
+            secret_key=auth_config.session_secret,
+            session_cookie="blink_session",
+            max_age=14 * 24 * 3600,
+            same_site="lax",
+            https_only=auth_config.session_https_only,
+        )
     return app
