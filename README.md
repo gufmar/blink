@@ -150,7 +150,9 @@ blink crawl run --job jobs/cardano.org.job.json --db /tmp/custom.sqlite3 --debug
 
 ## Scheduler (`blink serve`)
 
-Each job’s `schedule` section defines **crawl** and **link-check** tasks (interval or cron). `blink serve` starts Slack routes and a background scheduler that runs `blink crawl run` and `blink check run` as **subprocesses** (same as interactive CLI). Job files whose name starts with `_` (such as `_default.job.json`) are not registered.
+Each job’s `schedule` section defines **crawl** and **link-check** tasks (interval or cron). `blink serve` starts Slack routes and a background scheduler that runs `blink crawl run` and `blink check run` as **subprocesses** (same CLI entrypoints and job DB as manual runs). Scheduled runs use captured stdout/stderr, `max_runtime_seconds`, and no interactive `LiveStatus`; failures are logged under the job log file and in the scheduler state DB. Job files whose name starts with `_` (such as `_default.job.json`) are not registered.
+
+Job SQLite databases use WAL mode and retry commits on transient `database is locked` errors (e.g. link-check while browsing crawl results in the dashboard).
 
 - Persisted scheduler state: `<jobs-root>/.blink/scheduler.sqlite`
 - `GET /api/schedule` — JSON with declarative schedule plus next/last run times

@@ -5,12 +5,15 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from app.persistence.sqlite_retry import configure_sqlite_connection
+
 
 def connect_sqlite(db_path: Path) -> sqlite3.Connection:
     """Open a SQLite connection with row access by name."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(str(db_path))
+    connection = sqlite3.connect(str(db_path), timeout=30.0)
     connection.row_factory = sqlite3.Row
+    configure_sqlite_connection(connection)
     return connection
 
 
@@ -18,8 +21,6 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
     """Create required crawl tables if they do not exist."""
     connection.executescript(
         """
-        PRAGMA foreign_keys = ON;
-
         CREATE TABLE IF NOT EXISTS crawl_runs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             job_id TEXT NOT NULL,

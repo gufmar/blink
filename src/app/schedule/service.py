@@ -255,12 +255,17 @@ class BlinkSchedulerService:
             err_msg = None if code == 0 else (err_tail or f"exit {code}")
             self._store.set_finished(job_id, task_type, end_iso=end, exit_code=code, error=err_msg)
             if code != 0:
-                logger.warning(
-                    "Scheduled {} {} failed exit={} stderr_tail={!r}",
+                stdout_tail = (proc.stdout or "")[-2000:] if proc.stdout else ""
+                logger.error(
+                    "Scheduled task failed job_id={} task_type={} exit={} job_file={} "
+                    "timeout_seconds={}\n--- stderr (tail) ---\n{}\n--- stdout (tail) ---\n{}",
                     job_id,
                     task_type,
                     code,
-                    (err_tail or "")[:500],
+                    entry.job_path,
+                    timeout,
+                    err_tail or "(empty)",
+                    stdout_tail or "(empty)",
                 )
         except subprocess.TimeoutExpired as exc:
             end = _iso_utc_z()

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+
+from app.persistence.sqlite_retry import commit_with_retry
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -247,12 +249,15 @@ class CrawlRepository:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
 
+    def _commit(self) -> None:
+        commit_with_retry(self._connection)
+
     def create_run(self, job_id: str) -> int:
         cursor = self._connection.execute(
             "INSERT INTO crawl_runs(job_id) VALUES (?)",
             (job_id,),
         )
-        self._connection.commit()
+        self._commit()
         return int(cursor.lastrowid)
 
     def finish_run(self, run_id: int, pages_visited: int, pages_failed: int, links_discovered: int) -> None:
@@ -268,7 +273,7 @@ class CrawlRepository:
             """,
             (pages_visited, pages_failed, links_discovered, run_id),
         )
-        self._connection.commit()
+        self._commit()
 
     def add_page_result(
         self,
@@ -321,7 +326,7 @@ class CrawlRepository:
             """,
             (run_id, url, depth, status_code, int(ok), error_message, html, main_text),
         )
-        self._connection.commit()
+        self._commit()
 
     def add_link(
         self,
@@ -372,7 +377,7 @@ class CrawlRepository:
             """,
             (run_id, source_url, target_url, int(is_internal)),
         )
-        self._connection.commit()
+        self._commit()
 
     def prune_page_history(self, url: str, keep: int) -> None:
         self._connection.execute(
@@ -388,7 +393,7 @@ class CrawlRepository:
             """,
             (url, keep),
         )
-        self._connection.commit()
+        self._commit()
 
     def get_latest_run_id(self, job_id: str) -> int | None:
         row = self._connection.execute(
@@ -520,7 +525,7 @@ class CrawlRepository:
                 decision_reason,
             ),
         )
-        self._connection.commit()
+        self._commit()
         return int(cursor.lastrowid)
 
     def add_link_check_screenshot(
@@ -556,7 +561,7 @@ class CrawlRepository:
                 artifact_file,
             ),
         )
-        self._connection.commit()
+        self._commit()
         return int(cursor.lastrowid)
 
     def list_latest_screenshots_by_result_ids(self, result_ids: list[int]) -> dict[int, LinkCheckScreenshotRecord]:
@@ -852,7 +857,7 @@ class CrawlRepository:
             """,
             (job_id, based_on_crawl_run_id, started_at),
         )
-        self._connection.commit()
+        self._commit()
         return int(cursor.lastrowid)
 
     def finish_link_check_run(
@@ -893,7 +898,7 @@ class CrawlRepository:
                 link_check_run_id,
             ),
         )
-        self._connection.commit()
+        self._commit()
 
     def get_latest_link_check_run_id_for_crawl(self, crawl_run_id: int) -> int | None:
         """Return the most recent link_check_runs.id for this crawl run, if any."""
@@ -1006,7 +1011,7 @@ class CrawlRepository:
             """,
             (job_id, match_type, pattern, reason, expires_at, created_by, source),
         )
-        self._connection.commit()
+        self._commit()
         return int(cursor.lastrowid)
 
     def deactivate_link_ignore_rule(self, *, job_id: str, rule_id: int) -> bool:
@@ -1018,7 +1023,7 @@ class CrawlRepository:
             """,
             (rule_id, job_id),
         )
-        self._connection.commit()
+        self._commit()
         return int(cursor.rowcount) > 0
 
     def list_link_ignore_rules(
@@ -1206,7 +1211,7 @@ class CrawlRepository:
             """,
             (job_id, target_url, error_category),
         ).fetchone()
-        self._connection.commit()
+        self._commit()
         if row is None:
             raise RuntimeError("link_failure_state row missing after upsert")
         return self._row_to_link_failure_state(row)
@@ -1228,7 +1233,7 @@ class CrawlRepository:
                 "DELETE FROM link_failure_state WHERE job_id = ? AND target_url = ? AND error_category = ?",
                 (job_id, target_url, error_category),
             )
-        self._connection.commit()
+        self._commit()
         return int(cursor.rowcount)
 
     def get_link_failure_state(
@@ -1341,7 +1346,7 @@ class CrawlRepository:
             """,
             (job_id, target_url),
         ).fetchone()
-        self._connection.commit()
+        self._commit()
         if row is None:
             raise RuntimeError("link_alert row missing after upsert")
         return self._row_to_link_alert(row)
@@ -1426,7 +1431,7 @@ class CrawlRepository:
                 alert_id,
             ),
         )
-        self._connection.commit()
+        self._commit()
 
     def append_link_alert_event(
         self,
@@ -1444,7 +1449,7 @@ class CrawlRepository:
             """,
             (alert_id, event_type, actor_id, payload_json),
         )
-        self._connection.commit()
+        self._commit()
         return int(cursor.lastrowid)
 
     def enqueue_link_retest(
@@ -1473,7 +1478,7 @@ class CrawlRepository:
             """,
             (job_id, alert_id, target_url, slack_destination_id, slack_channel_id, slack_thread_ts, requested_by),
         )
-        self._connection.commit()
+        self._commit()
         return int(cursor.lastrowid)
 
     def list_pending_link_retests(self, *, job_id: str, limit: int = 20) -> list[LinkRetestQueueRecord]:
@@ -1531,7 +1536,7 @@ class CrawlRepository:
                 retest_id,
             ),
         )
-        self._connection.commit()
+        self._commit()
 
     def update_link_alert_lifecycle_fields(
         self,
@@ -1572,7 +1577,7 @@ class CrawlRepository:
             f"UPDATE link_alerts SET {', '.join(sets)} WHERE id = ?",
             params,
         )
-        self._connection.commit()
+        self._commit()
 
     def resolve_open_link_alert_by_id(self, *, alert_id: int, resolved_at: str) -> bool:
         cursor = self._connection.execute(
@@ -1589,7 +1594,7 @@ class CrawlRepository:
             """,
             (resolved_at, alert_id),
         )
-        self._connection.commit()
+        self._commit()
         return int(cursor.rowcount) > 0
 
     def expire_link_alert_human_buckets(self, *, job_id: str, now_iso: str) -> int:
@@ -1606,7 +1611,7 @@ class CrawlRepository:
             """,
             (job_id, now_iso),
         )
-        self._connection.commit()
+        self._commit()
         return int(cursor.rowcount)
 
     def increment_link_alert_reminder_count(self, *, job_id: str, target_url: str) -> None:
@@ -1618,7 +1623,7 @@ class CrawlRepository:
             """,
             (job_id, target_url),
         )
-        self._connection.commit()
+        self._commit()
 
     def resolve_link_alerts_not_in_targets(self, *, job_id: str, active_targets: set[str], resolved_at: str) -> int:
         open_rows = self._connection.execute(
@@ -1637,7 +1642,7 @@ class CrawlRepository:
             """,
             (resolved_at, job_id, *to_resolve),
         )
-        self._connection.commit()
+        self._commit()
         return int(cursor.rowcount)
 
     def _row_to_ignore_rule(self, row: sqlite3.Row) -> LinkIgnoreRuleRecord:
@@ -1938,7 +1943,7 @@ class CrawlRepository:
         )
         prev_id = self.get_previous_run_id(job_id=job_id, run_id=run_id)
         if prev_id is None:
-            self._connection.commit()
+            self._commit()
             return
 
         rows = self._connection.execute(
@@ -1984,7 +1989,7 @@ class CrawlRepository:
                 """,
                 (similarity, change_percent, prev_id, significant, run_id, page_id),
             )
-        self._connection.commit()
+        self._commit()
 
     def list_run_history(self, job_id: str, limit: int = 20) -> list[CrawlRunRecord]:
         rows = self._connection.execute(
@@ -2262,7 +2267,7 @@ class CrawlRepository:
                 """,
                 (run_id, run_id),
             )
-            self._connection.commit()
+            self._commit()
             return
 
         self._connection.execute(
@@ -2309,7 +2314,7 @@ class CrawlRepository:
             """,
             (run_id, previous_run_id, run_id, previous_run_id),
         )
-        self._connection.commit()
+        self._commit()
 
     def list_page_diffs(self, run_id: int, appeared: bool = True, limit: int = 100) -> list[PageDiffRecord]:
         table = "run_pages_appeared" if appeared else "run_pages_disappeared"
@@ -2566,7 +2571,7 @@ class CrawlRepository:
             """,
             (job_id, *run_ids),
         )
-        self._connection.commit()
+        self._commit()
         return int(cursor.rowcount or 0)
 
     def delete_crawl_runs(self, run_ids: list[int]) -> None:
@@ -2579,7 +2584,7 @@ class CrawlRepository:
             f"DELETE FROM crawl_runs WHERE id IN ({placeholders})",
             tuple(run_ids),
         )
-        self._connection.commit()
+        self._commit()
 
     def delete_link_check_runs(self, lc_run_ids: list[int]) -> None:
         """Delete link-check runs by id; relies on PRAGMA foreign_keys=ON for cascades."""
@@ -2591,4 +2596,4 @@ class CrawlRepository:
             f"DELETE FROM link_check_runs WHERE id IN ({placeholders})",
             tuple(lc_run_ids),
         )
-        self._connection.commit()
+        self._commit()

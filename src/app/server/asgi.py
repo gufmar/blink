@@ -251,7 +251,7 @@ def _db_path_for_job(jobs_root: Path, job_id: str) -> Path:
 def _open_repo_if_exists(db_path: Path) -> tuple[CrawlRepository, sqlite3.Connection] | None:
     if not db_path.exists():
         return None
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=30.0)
     conn.row_factory = sqlite3.Row
     return CrawlRepository(conn), conn
 

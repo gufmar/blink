@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import time
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from app.render.playwright_client import (
     RenderError,
     RenderResult,
 )
+from app.runtime.db_errors import exit_on_sqlite_failure
 from app.runtime.job_paths import build_job_paths
 from app.runtime.job_prepare import prepare_job_database, prepare_job_runtime
 from app.runtime.logging import configure_logging, event_logger
@@ -219,7 +221,14 @@ def run(
         except RenderError as exc:
             event_logger("crawl.runtime_error").error(str(exc))
             typer.secho(f"Crawl failed: {exc}", fg=typer.colors.RED, err=True)
-            raise typer.Exit(code=1)
+            raise typer.Exit(code=1) from exc
+        except sqlite3.Error as exc:
+            exit_on_sqlite_failure(
+                exc,
+                context="Crawl",
+                job_id=config["meta"]["job_id"],
+                db_path=str(db_path),
+            )
         finally:
             connection.close()
             status.update("Crawl finished")

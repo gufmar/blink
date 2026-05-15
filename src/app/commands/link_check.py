@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from app.notifications.service import NotificationService
 from app.notifications.slack.retest_worker import process_pending_link_retests
 from app.persistence.repository import CrawlRepository
 from app.persistence.sqlite import connect_sqlite, initialize_schema
+from app.runtime.db_errors import exit_on_sqlite_failure
 from app.runtime.job_paths import build_job_paths
 from app.runtime.job_prepare import prepare_job_database, prepare_job_runtime
 from app.runtime.logging import configure_logging, event_logger
@@ -730,6 +732,7 @@ def run(
                 started_at=datetime.now(tz=UTC).isoformat(),
             )
         link_check_started_at = datetime.now(tz=UTC).isoformat()
+        summary = None
         try:
             process_pending_link_retests(config=config, repository=repository, checker=checker, limit=10)
             summary = run_link_check(
@@ -769,6 +772,13 @@ def run(
                     pending_tolerance_total=summary.pending_tolerance,
                     reportable_failures_total=summary.reportable_failures,
                 )
+        except sqlite3.Error as exc:
+            exit_on_sqlite_failure(
+                exc,
+                context="Link-check",
+                job_id=config["meta"]["job_id"],
+                db_path=str(db_path),
+            )
         finally:
             close_session = getattr(checker, "close_session", None)
             if callable(close_session):
@@ -776,7 +786,7 @@ def run(
             connection.close()
             status.update("Link-check finished")
 
-    if summary.crawl_run_id is None:
+    if summary is None or summary.crawl_run_id is None:
         typer.secho(
             "No completed crawl run found for this job. If a crawl is still running, wait for it to finish; "
             "otherwise run `blink crawl run` first.",
