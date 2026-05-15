@@ -8,8 +8,36 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
 
+_LINK_CHECK_CHILD_MARKER = "\u2b11"  # ↫ LEFTWARDS ARROW WITH TIP UPWARDS
+
+
+def _fmt_dt_short(value: object, *, ongoing: bool = False) -> str:
+    if value is None or str(value).strip() == "":
+        return "ongoing" if ongoing else "—"
+    raw = str(value).strip()
+    normalized = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return raw
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    else:
+        parsed = parsed.astimezone(UTC)
+    return parsed.strftime("%Y-%m-%d %H:%M")
+
+
+def _html_action_link(url: object, label: str) -> str:
+    href = str(url or "").strip()
+    if not href:
+        return "—"
+    return f'<a href="{html.escape(href)}">{html.escape(label)}</a>'
+
 
 def _html_log_links_cell(run: dict[str, Any]) -> str:
+    view_url = str(run.get("logs_view_url") or "").strip()
+    if view_url:
+        return _html_action_link(view_url, "logs")
     pairs = list(run.get("log_links") or [])
     if not pairs:
         return "—"
@@ -28,10 +56,10 @@ def _auth_nav_html(links: dict[str, str]) -> str:
 
 
 def _html_report_link_cell(run: dict[str, Any]) -> str:
-    url = str(run.get("report_url") or "").strip()
-    if not url:
+    view_url = str(run.get("json_view_url") or run.get("report_url") or "").strip()
+    if not view_url:
         return "—"
-    return f'<a href="{html.escape(url)}">json</a>'
+    return _html_action_link(view_url, "json")
 
 
 def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, str]) -> str:
@@ -1137,43 +1165,94 @@ def render_results_structure_html(
     )
 
 
+def _history_run_row(run: dict[str, Any], *, child: bool) -> str:
+    def _fmt_count(value: object) -> str:
+        return esc(value if value not in (None, "") else "—")
+
+    run_id = run.get("run_id")
+    run_id_cell = (
+        f'<span class="run-child-marker" aria-hidden="true">{_LINK_CHECK_CHILD_MARKER}</span> '
+        f'<span class="mono">{esc(run_id)}</span>'
+        if child
+        else f'<span class="mono">{esc(run_id)}</span>'
+    )
+    row_class = ' class="row-link-check"' if child else ""
+    started = esc(_fmt_dt_short(run.get("started_at")))
+    finished = esc(_fmt_dt_short(run.get("finished_at"), ongoing=True))
+    if child:
+        visited = _fmt_count(run.get("checked_total"))
+        failed = _fmt_count(run.get("failed_total"))
+    else:
+        visited = _fmt_count(run.get("pages_visited"))
+        failed = _fmt_count(run.get("pages_failed"))
+    report_cell = _html_action_link(run.get("details_url"), "report")
+    logs_cell = _html_log_links_cell(run)
+    json_cell = _html_report_link_cell(run)
+    return f"""<tr{row_class}>
+    <td>{run_id_cell}</td>
+    <td class="mono time">{started}</td>
+    <td class="mono time">{finished}</td>
+    <td class="mono">{visited}</td>
+    <td class="mono">{failed}</td>
+    <td>{report_cell}</td>
+    <td>{logs_cell}</td>
+    <td>{json_cell}</td>
+  </tr>"""
+
+
+def render_file_viewer_html(
+    *,
+    title: str,
+    heading: str,
+    subtitle: str,
+    nav_links: list[tuple[str, str]],
+    panel_title: str,
+    body_html: str,
+    download_url: str,
+    download_label: str,
+    links: dict[str, str],
+) -> str:
+    """Dashboard page for inline log or JSON report content."""
+    download_btn = (
+        f'<a class="viewer-download" href="{esc(download_url)}">{esc(download_label)}</a>'
+        if download_url.strip()
+        else ""
+    )
+    body_extra = f"""
+<section class="panel viewer-panel" aria-label="{esc(panel_title)}">
+  <div class="panel-head viewer-head">{esc(panel_title)}{download_btn}</div>
+  {body_html}
+</section>
+"""
+    return _render_results_shell(
+        title=title,
+        heading=heading,
+        subtitle=subtitle,
+        nav_links=nav_links,
+        panel_title="",
+        table_headers=[],
+        table_rows="",
+        footer_link=links.get("back", links.get("refresh", "")),
+        footer_label="Back to history",
+        body_extra=body_extra,
+        show_table_header=False,
+        branding_links=links,
+    )
+
+
 def render_job_task_history_html(
     *,
     job: dict[str, Any],
     crawl_runs: list[dict[str, Any]],
     links: dict[str, str],
 ) -> str:
-    """Render crawl history with related link-check runs under each crawl."""
-
-    def _fmt(value: object) -> str:
-        return esc(value if value not in (None, "") else "—")
+    """Render crawl history with related link-check runs nested under each crawl."""
 
     rows: list[str] = []
     for crawl in crawl_runs:
-        crawl_rows = f"""<tr>
-    <td><span class="badge badge-crawl">crawl</span></td>
-    <td class="mono"><a href="{esc(crawl.get("details_url", ""))}">{_fmt(crawl.get("run_id"))}</a></td>
-    <td class="mono">{_fmt(crawl.get("started_at"))}</td>
-    <td class="mono">{_fmt(crawl.get("finished_at") or "ongoing")}</td>
-    <td class="mono">{_fmt(crawl.get("pages_visited"))}</td>
-    <td class="mono">{_fmt(crawl.get("pages_failed"))}</td>
-    <td class="mono">{_html_log_links_cell(crawl)}</td>
-    <td class="mono">{_html_report_link_cell(crawl)}</td>
-  </tr>"""
-        rows.append(crawl_rows)
+        rows.append(_history_run_row(crawl, child=False))
         for link_run in list(crawl.get("link_checks") or []):
-            rows.append(
-                f"""<tr>
-    <td><span class="badge badge-link_check">link-check</span></td>
-    <td class="mono"><a href="{esc(link_run.get("details_url", ""))}">{_fmt(link_run.get("run_id"))}</a></td>
-    <td class="mono">{_fmt(link_run.get("started_at"))}</td>
-    <td class="mono">{_fmt(link_run.get("finished_at") or "ongoing")}</td>
-    <td class="mono">{_fmt(link_run.get("checked_total"))}</td>
-    <td class="mono">{_fmt(link_run.get("failed_total"))}</td>
-    <td class="mono">{_html_log_links_cell(link_run)}</td>
-    <td class="mono">{_html_report_link_cell(link_run)}</td>
-  </tr>"""
-            )
+            rows.append(_history_run_row(link_run, child=True))
 
     return _render_results_shell(
         title=f"Blink history · {esc(job.get('job_id', ''))}",
@@ -1184,7 +1263,7 @@ def render_job_task_history_html(
             ("Back to jobs", links.get("jobs_index", "")),
         ],
         panel_title="Crawl runs with related link-check runs",
-        table_headers=["Type", "Run id", "Started", "Finished", "Visited/Checked", "Failed", "Logs", "Report"],
+        table_headers=["Run", "Started", "Finished", "Visited/Checked", "Failed", "Report", "Logs", "JSON"],
         table_rows="".join(rows) if rows else '<tr><td colspan="8" class="empty">No run history available.</td></tr>',
         footer_link=links.get("refresh", ""),
         footer_label="Refresh",
@@ -1501,6 +1580,18 @@ def _shared_styles() -> str:
   .source-link { display: inline; }
   .sticky-head thead th { position: sticky; top: 0; z-index: 1; }
   .mono { font-family: ui-monospace, "Cascadia Code", "SF Mono", Menlo, monospace; font-size: 0.78rem; }
+  .time { white-space: nowrap; }
+  .run-child-marker { color: var(--muted); margin-right: 0.15rem; }
+  tr.row-link-check td:first-child { padding-left: 2rem; }
+  .viewer-panel { margin-top: 0; }
+  .viewer-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+  .viewer-download { font-size: 0.8rem; font-weight: 600; text-decoration: none; color: var(--cardano-blue); border: 1px solid var(--border); border-radius: 8px; padding: 0.35rem 0.75rem; background: #fff; }
+  .viewer-download:hover { background: #f8fafc; }
+  .viewer-downloads { display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 0.75rem 1.25rem 0; }
+  .viewer-body { padding: 1rem 1.25rem 1.25rem; }
+  .viewer-day-label { font-size: 0.75rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin: 1rem 0 0.35rem; }
+  .viewer-day-label:first-child { margin-top: 0; }
+  .viewer-pre { margin: 0; padding: 0.85rem 1rem; background: #0f172a; color: #e2e8f0; border-radius: 8px; overflow: auto; max-height: 70vh; font-size: 0.75rem; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
   footer { margin-top: 2rem; padding: 1rem 0; font-size: 0.75rem; color: var(--muted); text-align: center; }
 </style>
 """

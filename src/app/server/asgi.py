@@ -7,7 +7,7 @@ import os
 import re
 import sqlite3
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import unquote, urlencode, urlsplit
@@ -45,6 +45,8 @@ from app.runtime.job_paths import build_job_paths
 from app.schedule.service import BlinkSchedulerService
 from app.server.auth_routes import auth_route_handlers
 from app.server.dashboard_page import (
+    esc as _html_esc,
+    render_file_viewer_html,
     render_job_task_history_html,
     render_results_job_html,
     render_results_jobs_html,
@@ -352,6 +354,23 @@ def _utc_log_dates_from_iso(started_at: str | None, finished_at: str | None) -> 
     return ordered
 
 
+def _utc_log_dates_span(started_at: str | None, finished_at: str | None) -> list[str]:
+    """All UTC calendar dates from run start through finish (inclusive)."""
+    start = _parse_iso_datetime_utc(started_at)
+    if start is None:
+        return _utc_log_dates_from_iso(started_at, finished_at)
+    end = _parse_iso_datetime_utc(finished_at) or datetime.now(tz=timezone.utc)
+    if end < start:
+        end = start
+    dates: list[str] = []
+    day = start.date()
+    last = end.date()
+    while day <= last:
+        dates.append(day.isoformat())
+        day += timedelta(days=1)
+    return dates
+
+
 def _best_effort_report_file(
     reports_dir: Path,
     job_id: str,
@@ -390,21 +409,43 @@ def _attach_log_report_urls_for_run_rows(
     reports_dir = _job_data_root(jobs_root, job_id) / "reports"
     for run in run_rows:
         tt = str(run.get("task_type") or "crawl")
-        dates = _utc_log_dates_from_iso(run.get("started_at"), run.get("finished_at"))
+        dates = _utc_log_dates_span(run.get("started_at"), run.get("finished_at"))
         run["log_links"] = [
-            (_path_for(request, "dashboard_results_job_log", job_id=job_id, log_date=d), d)
+            (
+                _path_for(request, "dashboard_results_job_log", job_id=job_id, log_date=d),
+                d,
+            )
             for d in dates
         ]
-        run["report_url"] = ""
+        run_id = int(run.get("run_id") or 0)
+        if len(dates) == 1:
+            run["logs_view_url"] = _path_for(
+                request,
+                "dashboard_results_job_log",
+                job_id=job_id,
+                log_date=dates[0],
+            )
+        elif dates and run_id:
+            run["logs_view_url"] = (
+                f"{_path_for(request, 'dashboard_results_run_logs', job_id=job_id, run_id=run_id)}"
+                f"?task_type={tt}"
+            )
+        else:
+            run["logs_view_url"] = ""
+        run["json_view_url"] = ""
+        run["json_download_url"] = ""
         if tt == "link_check":
             hit = _best_effort_report_file(reports_dir, job_id, run.get("started_at"), run.get("finished_at"))
             if hit is not None:
-                run["report_url"] = _path_for(
+                report_path = _path_for(
                     request,
                     "dashboard_results_job_report",
                     job_id=job_id,
                     report_file=hit.name,
                 )
+                run["json_view_url"] = report_path
+                run["json_download_url"] = f"{report_path}?download=1"
+                run["report_url"] = report_path
 
 
 def _split_url_path_segments(url: str) -> list[str]:
@@ -1245,6 +1286,89 @@ async def dashboard_results_job_link_checks(request: Request) -> HTMLResponse:
     return await _dashboard_job_runs_page(request, mode="link_check")
 
 
+def _wants_file_download(request: Request) -> bool:
+    return str(request.query_params.get("download") or "").lower() in {"1", "true", "yes"}
+
+
+def _resolved_job_log_path(jobs_root: Path, job_id: str, log_date: str) -> Path | None:
+    if not _LOG_FILENAME_DATE_RE.match(log_date):
+        return None
+    logs_dir = (_job_data_root(jobs_root, job_id) / "logs").resolve()
+    log_path = (logs_dir / f"{log_date}.log").resolve()
+    if log_path.parent != logs_dir or not log_path.is_file():
+        return None
+    return log_path
+
+
+def _resolved_job_report_path(jobs_root: Path, job_id: str, report_file: str) -> Path | None:
+    if "/" in report_file or "\\" in report_file or report_file.startswith("."):
+        return None
+    if not report_file.startswith(f"report_{job_id}_") or not report_file.endswith(".json"):
+        return None
+    reports_dir = (_job_data_root(jobs_root, job_id) / "reports").resolve()
+    report_path = (reports_dir / report_file).resolve()
+    if report_path.parent != reports_dir or not report_path.is_file():
+        return None
+    return report_path
+
+
+def _viewer_nav_links(request: Request, *, job_id: str) -> dict[str, str]:
+    return {
+        "main_dashboard": _path_for(request, "dashboard_schedule"),
+        "jobs_index": _path_for(request, "dashboard_results_jobs"),
+        "history": _path_for(request, "dashboard_results_job_history", job_id=job_id),
+        "back": _path_for(request, "dashboard_results_job_history", job_id=job_id),
+        "refresh": str(request.url),
+        **_page_links(request),
+    }
+
+
+def _render_log_viewer_html(
+    request: Request,
+    *,
+    job_id: str,
+    sections: list[tuple[str, str]],
+    download_urls: list[tuple[str, str]],
+) -> str:
+    if not sections:
+        body = '<div class="viewer-body"><p class="empty">No log content available for this run.</p></div>'
+    else:
+        parts: list[str] = ['<div class="viewer-body">']
+        for label, text in sections:
+            parts.append(f'<div class="viewer-day-label">{_html_esc(label)}</div>')
+            parts.append(f'<pre class="viewer-pre">{_html_esc(text)}</pre>')
+        parts.append("</div>")
+        body = "".join(parts)
+    if len(download_urls) == 1:
+        download_url, day_label = download_urls[0]
+        download_label = f"Download {day_label}.log"
+    else:
+        download_url = ""
+        download_label = ""
+    if len(download_urls) > 1:
+        day_links = " ".join(
+            f'<a class="viewer-download" href="{_html_esc(url)}">{_html_esc(day)}.log</a>'
+            for url, day in download_urls
+        )
+        body = f'<div class="viewer-downloads">{day_links}</div>' + body
+    nav = [
+        ("Main dashboard", _path_for(request, "dashboard_schedule")),
+        ("Jobs", _path_for(request, "dashboard_results_jobs")),
+        ("Task history", _path_for(request, "dashboard_results_job_history", job_id=job_id)),
+    ]
+    return render_file_viewer_html(
+        title=f"Blink logs · {job_id}",
+        heading=f"Run logs · {job_id}",
+        subtitle="Log output for the selected run (UTC daily files).",
+        nav_links=nav,
+        panel_title="Log output",
+        body_html=body,
+        download_url=download_url,
+        download_label=download_label,
+        links=_viewer_nav_links(request, job_id=job_id),
+    )
+
+
 async def dashboard_results_job_log(request: Request) -> Response:
     jobs_root: Path = request.app.state.jobs_root
     job_id = str(request.path_params["job_id"])
@@ -1254,13 +1378,69 @@ async def dashboard_results_job_log(request: Request) -> Response:
     log_date = str(request.path_params["log_date"])
     if _job_entry_by_id(jobs_root, job_id) is None:
         return Response("Job not found", status_code=404)
-    if not _LOG_FILENAME_DATE_RE.match(log_date):
+    log_path = _resolved_job_log_path(jobs_root, job_id, log_date)
+    if log_path is None:
         return Response("Not found", status_code=404)
-    logs_dir = (_job_data_root(jobs_root, job_id) / "logs").resolve()
-    log_path = (logs_dir / f"{log_date}.log").resolve()
-    if log_path.parent != logs_dir or not log_path.is_file():
-        return Response("Not found", status_code=404)
-    return FileResponse(path=log_path, filename=f"{log_date}.log", media_type="text/plain; charset=utf-8")
+    if _wants_file_download(request):
+        return FileResponse(path=log_path, filename=f"{log_date}.log", media_type="text/plain; charset=utf-8")
+    content = log_path.read_text(encoding="utf-8", errors="replace")
+    view_url = _path_for(request, "dashboard_results_job_log", job_id=job_id, log_date=log_date)
+    page = _render_log_viewer_html(
+        request,
+        job_id=job_id,
+        sections=[(log_date, content)],
+        download_urls=[(f"{view_url}?download=1", log_date)],
+    )
+    return HTMLResponse(page)
+
+
+async def dashboard_results_run_logs(request: Request) -> Response:
+    jobs_root: Path = request.app.state.jobs_root
+    job_id = str(request.path_params["job_id"])
+    denied = require_job_access(request, job_id)
+    if denied is not None:
+        return denied
+    run_id = int(request.path_params["run_id"])
+    task_type = str(request.query_params.get("task_type") or "crawl").strip().lower()
+    if task_type not in {"crawl", "link_check"}:
+        task_type = "crawl"
+    if _job_entry_by_id(jobs_root, job_id) is None:
+        return Response("Job not found", status_code=404)
+    repo_and_conn = _open_repo_if_exists(_db_path_for_job(jobs_root, job_id))
+    if repo_and_conn is None:
+        return Response("Run not found", status_code=404)
+    repo, _ = repo_and_conn
+    try:
+        if task_type == "link_check":
+            link_check_run = repo.get_link_check_run(run_id)
+            if link_check_run is None or link_check_run.job_id != job_id:
+                return Response("Run not found", status_code=404)
+            started_at = link_check_run.started_at
+            finished_at = link_check_run.finished_at
+        else:
+            run = repo.get_run_record(job_id=job_id, run_id=run_id)
+            if run is None:
+                return Response("Run not found", status_code=404)
+            started_at = run.started_at
+            finished_at = run.finished_at
+    finally:
+        _close_repo(repo_and_conn)
+    sections: list[tuple[str, str]] = []
+    download_urls: list[tuple[str, str]] = []
+    for log_date in _utc_log_dates_span(started_at, finished_at):
+        resolved = _resolved_job_log_path(jobs_root, job_id, log_date)
+        if resolved is None:
+            continue
+        sections.append((log_date, resolved.read_text(encoding="utf-8", errors="replace")))
+        day_url = _path_for(request, "dashboard_results_job_log", job_id=job_id, log_date=log_date)
+        download_urls.append((f"{day_url}?download=1", log_date))
+    page = _render_log_viewer_html(
+        request,
+        job_id=job_id,
+        sections=sections,
+        download_urls=download_urls,
+    )
+    return HTMLResponse(page)
 
 
 async def dashboard_results_job_report(request: Request) -> Response:
@@ -1272,15 +1452,39 @@ async def dashboard_results_job_report(request: Request) -> Response:
     report_file = str(request.path_params["report_file"])
     if _job_entry_by_id(jobs_root, job_id) is None:
         return Response("Job not found", status_code=404)
-    if "/" in report_file or "\\" in report_file or report_file.startswith("."):
+    report_path = _resolved_job_report_path(jobs_root, job_id, report_file)
+    if report_path is None:
         return Response("Not found", status_code=404)
-    if not report_file.startswith(f"report_{job_id}_") or not report_file.endswith(".json"):
-        return Response("Not found", status_code=404)
-    reports_dir = (_job_data_root(jobs_root, job_id) / "reports").resolve()
-    report_path = (reports_dir / report_file).resolve()
-    if report_path.parent != reports_dir or not report_path.is_file():
-        return Response("Not found", status_code=404)
-    return FileResponse(path=report_path, filename=report_file, media_type="application/json; charset=utf-8")
+    if _wants_file_download(request):
+        return FileResponse(path=report_path, filename=report_file, media_type="application/json; charset=utf-8")
+    raw = report_path.read_text(encoding="utf-8", errors="replace")
+    try:
+        payload_text = json.dumps(json.loads(raw), indent=2, ensure_ascii=False)
+    except json.JSONDecodeError:
+        payload_text = raw
+    view_url = _path_for(request, "dashboard_results_job_report", job_id=job_id, report_file=report_file)
+    body = (
+        '<div class="viewer-body">'
+        f'<pre class="viewer-pre">{_html_esc(payload_text)}</pre>'
+        "</div>"
+    )
+    nav = [
+        ("Main dashboard", _path_for(request, "dashboard_schedule")),
+        ("Jobs", _path_for(request, "dashboard_results_jobs")),
+        ("Task history", _path_for(request, "dashboard_results_job_history", job_id=job_id)),
+    ]
+    page = render_file_viewer_html(
+        title=f"Blink report · {job_id}",
+        heading=f"JSON report · {job_id}",
+        subtitle=report_file,
+        nav_links=nav,
+        panel_title="Link-check JSON report",
+        body_html=body,
+        download_url=f"{view_url}?download=1",
+        download_label="Download JSON",
+        links=_viewer_nav_links(request, job_id=job_id),
+    )
+    return HTMLResponse(page)
 
 
 async def dashboard_results_run(request: Request) -> HTMLResponse:
@@ -1925,6 +2129,12 @@ def build_app(
                 dashboard_results_job_log,
                 methods=["GET"],
                 name="dashboard_results_job_log",
+            ),
+            Route(
+                "/dashboard/results/{job_id}/runs/{run_id:int}/logs",
+                dashboard_results_run_logs,
+                methods=["GET"],
+                name="dashboard_results_run_logs",
             ),
             Route(
                 "/dashboard/results/{job_id}/reports/{report_file}",

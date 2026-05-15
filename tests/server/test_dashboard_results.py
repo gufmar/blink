@@ -273,19 +273,41 @@ def test_dashboard_results_pages(tmp_path: Path) -> None:
     assert "failed only" in structure_external_page.text
     assert "ignored only" in structure_external_page.text
 
+    history_page = client.get("/dashboard/results/zzz/history")
+    assert history_page.status_code == 200
+    assert "Task history" in history_page.text
+    assert "\u2b11" in history_page.text
+    assert f'<span class="mono">{link_check_run_id}</span>' in history_page.text
+    assert f"/dashboard/results/zzz/runs/{run_id}?task_type=crawl" in history_page.text
+    assert "Download JSON" not in history_page.text or "json" in history_page.text.lower()
+
     log_ok = client.get(f"/dashboard/results/zzz/logs/{log_day}")
     assert log_ok.status_code == 200
     assert "blink-test-log-line" in log_ok.text
+    assert "Download" in log_ok.text
+    assert "viewer-pre" in log_ok.text
+    log_download = client.get(f"/dashboard/results/zzz/logs/{log_day}?download=1")
+    assert log_download.status_code == 200
+    assert "blink-test-log-line" in log_download.text
     assert client.get("/dashboard/results/zzz/logs/not-valid").status_code == 404
     assert client.get("/dashboard/results/zzz/logs/2020-01-01").status_code == 404
+
+    run_logs = client.get(f"/dashboard/results/zzz/runs/{run_id}/logs?task_type=crawl")
+    assert run_logs.status_code == 200
+    assert "blink-test-log-line" in run_logs.text
 
     reports_dir = tmp_path / "data" / "zzz" / "reports"
     reports_dir.mkdir(parents=True)
     sample_report = reports_dir / f"report_zzz_{log_day}_12-00.json"
     sample_report.write_text('{"ok": true}', encoding="utf-8")
-    report_fetch = client.get(f"/dashboard/results/zzz/reports/{sample_report.name}")
-    assert report_fetch.status_code == 200
-    assert report_fetch.json() == {"ok": True}
+    report_view = client.get(f"/dashboard/results/zzz/reports/{sample_report.name}")
+    assert report_view.status_code == 200
+    assert "&quot;ok&quot;: true" in report_view.text
+    assert "viewer-pre" in report_view.text
+    assert "Download JSON" in report_view.text
+    report_download = client.get(f"/dashboard/results/zzz/reports/{sample_report.name}?download=1")
+    assert report_download.status_code == 200
+    assert report_download.json() == {"ok": True}
     assert client.get("/dashboard/results/zzz/reports/evil.json").status_code == 404
 
 
