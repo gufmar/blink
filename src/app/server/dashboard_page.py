@@ -74,16 +74,6 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
     def esc(s: object) -> str:
         return html.escape("" if s is None else str(s))
 
-    grouped: dict[str, dict[str, Any]] = {}
-    for t in tasks:
-        job_id = str(t.get("job_id") or "")
-        if not job_id:
-            continue
-        entry = grouped.setdefault(job_id, {"job_id": job_id, "crawl": None, "link_check": None})
-        task_type = str(t.get("task_type") or "")
-        if task_type in {"crawl", "link_check"}:
-            entry[task_type] = t
-
     def _fmt_dt_short(value: object) -> str:
         if value is None or str(value).strip() == "":
             return "—"
@@ -116,78 +106,143 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
         minutes = (delta_seconds % 3600) // 60
         return f"{hours}:{minutes:02d} from now"
 
-    def _line_last(label: str, task: dict[str, Any] | None) -> str:
-        rt = (task or {}).get("runtime") or {}
-        details_url = str((task or {}).get("latest_crawl_url" if label == "last crawl" else "latest_link_url") or "")
-        when = _fmt_dt_short(rt.get("last_end_at"))
-        when_cell = f'<a href="{esc(details_url)}" class="mono">{esc(when)}</a>' if details_url and when != "—" else f'<span class="mono">{esc(when)}</span>'
-        if label == "last crawl":
-            latest_crawl = (task or {}).get("latest_crawl") or {}
+    def _resolve_last_runtime(
+        task: dict[str, Any] | None,
+        latest: dict[str, Any] | None,
+        *,
+        kind: str,
+    ) -> dict[str, Any]:
+        rt = dict((task or {}).get("runtime") or {})
+        if rt.get("last_end_at"):
+            return rt
+        if not latest:
+            return rt
+        finished = latest.get("finished_at")
+        if not finished:
+            return {**rt, "running": True}
+        if kind == "crawl":
+            exit_code = 0 if int(latest.get("pages_failed") or 0) == 0 else 1
+        else:
+            exit_code = 0 if int(latest.get("failed_total") or 0) == 0 else 1
+        return {
+            **rt,
+            "last_end_at": finished,
+            "last_exit_code": exit_code,
+            "running": False,
+        }
+
+    def _line_last(
+        label: str,
+        task: dict[str, Any] | None,
+        job_row: dict[str, Any],
+        *,
+        show_history: bool = False,
+    ) -> str:
+        is_crawl = label == "last crawl"
+        src = task or job_row
+        latest = (task or {}).get("latest_crawl" if is_crawl else "latest_link") or job_row.get(
+            "latest_crawl" if is_crawl else "latest_link"
+        )
+        if not latest and not ((task or {}).get("runtime") or {}).get("last_end_at"):
+            return ""
+        details_url = str(
+            (task or {}).get("latest_crawl_url" if is_crawl else "latest_link_url")
+            or job_row.get("latest_crawl_url" if is_crawl else "latest_link_url")
+            or ""
+        )
+        rt = _resolve_last_runtime(task, latest, kind="crawl" if is_crawl else "link_check")
+        when_raw = rt.get("last_end_at") or (latest or {}).get("finished_at") or (latest or {}).get("started_at")
+        when = _fmt_dt_short(when_raw)
+        when_cell = (
+            f'<a href="{esc(details_url)}" class="mono">{esc(when)}</a>'
+            if details_url and when != "—"
+            else f'<span class="mono">{esc(when)}</span>'
+        )
+        if is_crawl:
+            latest_crawl = latest or {}
             metrics = (
                 f'pages: {esc(latest_crawl.get("pages_visited") if latest_crawl.get("pages_visited") is not None else "—")} · '
-                f'ignored: {esc((task or {}).get("ignored_total") if (task or {}).get("ignored_total") is not None else "—")} · '
-                f'ext.links: {esc((task or {}).get("external_total") if (task or {}).get("external_total") is not None else "—")}'
+                f'ignored: {esc(src.get("ignored_total") if src.get("ignored_total") is not None else "—")} · '
+                f'ext.links: {esc(src.get("external_total") if src.get("external_total") is not None else "—")}'
             )
         else:
-            latest_link = (task or {}).get("latest_link") or {}
+            latest_link = latest or {}
             metrics = (
                 f'tested: {esc(latest_link.get("checked_total") if latest_link.get("checked_total") is not None else "—")} · '
-                f'ignored: {esc((task or {}).get("ignored_total") if (task or {}).get("ignored_total") is not None else "—")} '
-                f'({esc((task or {}).get("ignored_ratio") if (task or {}).get("ignored_ratio") is not None else 0)}%) · '
-                f'failed: {esc((task or {}).get("failed_total") if (task or {}).get("failed_total") is not None else "—")} '
-                f'({esc((task or {}).get("failed_ratio") if (task or {}).get("failed_ratio") is not None else 0)}%)'
+                f'ignored: {esc(src.get("ignored_total") if src.get("ignored_total") is not None else "—")} '
+                f'({esc(src.get("ignored_ratio") if src.get("ignored_ratio") is not None else 0)}%) · '
+                f'failed: {esc(src.get("failed_total") if src.get("failed_total") is not None else "—")} '
+                f'({esc(src.get("failed_ratio") if src.get("failed_ratio") is not None else 0)}%)'
             )
+        history_url = str(job_row.get("history_url") or "").strip()
+        history_html = (
+            f'<span class="line-history"><a href="{esc(history_url)}">(history)</a></span>'
+            if show_history and history_url
+            else '<span class="line-history" aria-hidden="true"></span>'
+        )
         return (
             f'<div class="job-line-grid"><span class="line-label">{esc(label)}:</span>'
             f'<span class="line-date">{when_cell}</span>'
             f'<span class="line-mid mono">{metrics}</span>'
-            f'<span class="line-status">{_status_cell(rt)}</span></div>'
+            f'<span class="line-status-col">{history_html}<span class="line-status">{_status_cell(rt)}</span></span></div>'
         )
 
     def _line_next(label: str, task: dict[str, Any] | None) -> str:
-        rt = (task or {}).get("runtime") or {}
-        dec = (task or {}).get("declarative") or {}
-        expr = str(dec.get("expression") or "").strip() if task else ""
+        if not task:
+            return ""
+        rt = task.get("runtime") or {}
+        dec = task.get("declarative") or {}
+        if not dec.get("enabled"):
+            return ""
+        expr = str(dec.get("expression") or "").strip()
         cadence = f"{expr} cadence" if expr else "—"
         next_raw = rt.get("next_run_at")
+        if not next_raw:
+            return ""
         return (
             f'<div class="job-line-grid"><span class="line-label">{esc(label)}:</span>'
             f'<span class="line-date mono">{esc(_fmt_dt_short(next_raw))}</span>'
             f'<span class="line-mid mono">{esc(cadence)} · {esc(_fmt_from_now(next_raw))}</span>'
-            f'<span class="line-status">—</span></div>'
+            f'<span class="line-status-col"><span class="line-history" aria-hidden="true"></span>'
+            f'<span class="line-status">—</span></span></div>'
         )
 
     def row_for(job_row: dict[str, Any]) -> str:
         job_id = str(job_row.get("job_id") or "")
         job_name = str(job_row.get("job_name") or job_id)
-        crawl_task_row = job_row.get("crawl") or {}
-        link_task_row = job_row.get("link_check") or {}
-        history_url = str(job_row.get("history_url") or crawl_task_row.get("history_url") or "").strip()
-        crawl_list_u = str(job_row.get("crawl_runs_url") or crawl_task_row.get("crawl_runs_url") or "").strip()
-        lc_list_u = str(job_row.get("link_check_runs_url") or link_task_row.get("link_check_runs_url") or "").strip()
+        crawl_list_u = str(job_row.get("crawl_runs_url") or "").strip()
+        lc_list_u = str(job_row.get("link_check_runs_url") or "").strip()
         crawl_task = job_row.get("crawl")
         link_task = job_row.get("link_check")
-        history_link = f'<a href="{esc(history_url)}">(history)</a>' if history_url else ""
         run_lists = ""
         if crawl_list_u and lc_list_u:
             run_lists = (
                 f'<span class="job-run-lists mono"> · <a href="{esc(crawl_list_u)}">crawls</a>'
                 f' · <a href="{esc(lc_list_u)}">link-checks</a></span>'
             )
-        crawl_task = crawl_task_row
-        link_task = link_task_row
+        lines = [
+            _line_last("last crawl", crawl_task, job_row, show_history=True),
+            _line_next("next crawl", crawl_task),
+            _line_last("last check", link_task, job_row),
+            _line_next("next check", link_task),
+        ]
+        body = "\n      ".join(line for line in lines if line)
+        if not body:
+            body = '<div class="job-line-grid job-line-empty"><span class="line-label">—</span><span class="mono">No runs yet</span></div>'
         return f"""<tr>
-    <td>
-      <div class="job-title-row"><span class="job-title">{esc(job_name)}</span><span class="job-history">{history_link}{run_lists}</span></div>
-      {_line_last("last crawl", crawl_task)}
-      {_line_next("next crawl", crawl_task)}
-      {_line_last("last check", link_task)}
-      {_line_next("next check", link_task)}
+    <td class="job-cell">
+      <div class="job-card-scroll" tabindex="0" aria-label="Job details for {esc(job_name)} — swipe horizontally on small screens">
+        <div class="job-card-inner">
+          <div class="job-title-row"><span class="job-title">{esc(job_name)}</span>{run_lists}</div>
+          {body}
+        </div>
+      </div>
     </td>
   </tr>"""
 
-    rows = "\n".join(row_for(grouped[k]) for k in sorted(grouped.keys())) if grouped else ""
-    empty_row = '<tr><td class="empty">No enabled schedule tasks found under jobs_root.</td></tr>'
+    job_rows = list(payload.get("job_rows") or [])
+    rows = "\n".join(row_for(row) for row in job_rows) if job_rows else ""
+    empty_row = '<tr><td class="empty">No jobs found under jobs_root.</td></tr>'
 
     gen_at = datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
 
@@ -268,19 +323,28 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
       font-weight: 700;
       color: var(--cardano-blue);
     }}
-    .job-history a {{
+    .line-history a {{
       font-size: 0.8rem;
       color: var(--cardano-blue-light);
       text-decoration: underline;
       text-underline-offset: 2px;
     }}
+    .line-history {{
+      display: block;
+      min-height: 1.05rem;
+      margin-bottom: 0.1rem;
+    }}
     .job-line-grid {{
       display: grid;
-      grid-template-columns: 7.25rem 12rem minmax(10rem, 1fr) 8rem;
+      grid-template-columns: 7.25rem 11rem minmax(12rem, 1fr) 6.5rem;
       gap: 0.75rem;
-      align-items: center;
+      align-items: start;
       margin-top: 0.18rem;
       font-size: 0.82rem;
+      min-width: 36rem;
+    }}
+    .job-line-empty {{
+      min-width: 0;
     }}
     .line-label {{
       color: var(--muted);
@@ -288,7 +352,31 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
     }}
     .line-date {{ white-space: nowrap; }}
     .line-mid {{ color: var(--text); }}
+    .line-status-col {{
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.1rem;
+    }}
     .line-status {{ white-space: nowrap; }}
+    .job-cell {{
+      padding: 0;
+      vertical-align: top;
+    }}
+    .job-card-scroll {{
+      overflow-x: auto;
+      overflow-y: hidden;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior-x: contain;
+      padding: 0.65rem 1rem;
+    }}
+    .job-card-inner {{
+      min-width: min-content;
+    }}
+    .panel-scroll {{
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }}
     .hero h1 {{
       margin: 0 0 0.35rem;
       font-size: 1.65rem;
@@ -485,7 +573,8 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
     <p class="jobs-root"><strong>jobs_root</strong> · {jobs_root}</p>
     <section class="panel" aria-label="Task table">
       <div class="panel-head">Task overview</div>
-      <table>
+      <div class="panel-scroll">
+      <table class="job-table">
         <thead>
           <tr>
             <th>Job</th>
@@ -495,6 +584,7 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
           {rows if rows else empty_row}
         </tbody>
       </table>
+      </div>
     </section>
     <footer>Generated {esc(gen_at)} · <a href="{esc(links.get("schedule_refresh", ""))}">Refresh</a></footer>
   </div>

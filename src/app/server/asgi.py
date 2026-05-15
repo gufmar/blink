@@ -685,10 +685,29 @@ async def schedule_dashboard(request: Request) -> HTMLResponse:
             "ignored_total": ignored_total,
             "ignored_ratio": ignored_ratio,
         }
+    tasks_by_job: dict[str, dict[str, Any]] = {}
     for task in payload.get("tasks") or []:
         job_id = str(task.get("job_id") or "")
         meta = job_meta.get(job_id) or {}
         task.update(meta)
+        task_type = str(task.get("task_type") or "")
+        if task_type in {"crawl", "link_check"}:
+            tasks_by_job.setdefault(job_id, {})[task_type] = task
+    job_rows: list[dict[str, Any]] = []
+    for job in sorted(jobs, key=lambda row: str(row.get("job_id") or "")):
+        job_id = str(job["job_id"])
+        meta = job_meta.get(job_id) or {}
+        by_type = tasks_by_job.get(job_id, {})
+        job_rows.append(
+            {
+                "job_id": job_id,
+                "job_name": str(meta.get("job_name") or job.get("name") or job_id),
+                "crawl": by_type.get("crawl"),
+                "link_check": by_type.get("link_check"),
+                **meta,
+            }
+        )
+    payload["job_rows"] = job_rows
     page = render_schedule_dashboard_html(
         payload,
         links={

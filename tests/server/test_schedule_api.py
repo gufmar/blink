@@ -45,6 +45,58 @@ def test_dashboard_ok(tmp_path: Path) -> None:
     assert "Blink schedules" in r.text
     assert "/api/schedule" in r.text
     assert "/dashboard/results" in r.text
+    assert "job-card-scroll" in r.text
+    assert "line-status-col" in r.text
+
+
+def test_dashboard_shows_last_run_when_schedule_disabled(tmp_path: Path) -> None:
+    from datetime import UTC, datetime
+
+    from app.persistence.repository import CrawlRepository
+    from app.persistence.sqlite import connect_sqlite, initialize_schema
+
+    _minimal_job(tmp_path)
+    job_path = tmp_path / "zzz.job.json"
+    data = json.loads(job_path.read_text(encoding="utf-8"))
+    data["schedule"]["crawl"]["enabled"] = False
+    data["schedule"]["link_check"]["enabled"] = False
+    job_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    db_path = tmp_path / "data" / "zzz" / "db" / "zzz.sqlite3"
+    conn = connect_sqlite(db_path)
+    initialize_schema(conn)
+    repo = CrawlRepository(conn)
+    run_id = repo.create_run("zzz")
+    repo.add_page_result(run_id=run_id, url="https://example.org", depth=0, status_code=200, ok=True)
+    repo.finish_run(run_id=run_id, pages_visited=1, pages_failed=0, links_discovered=0)
+    lc_id = repo.create_link_check_run(
+        job_id="zzz",
+        based_on_crawl_run_id=run_id,
+        started_at=datetime.now(tz=UTC).isoformat(),
+    )
+    repo.finish_link_check_run(
+        link_check_run_id=lc_id,
+        finished_at=datetime.now(tz=UTC).isoformat(),
+        checked_total=1,
+        passed_total=1,
+        failed_total=0,
+        errored_total=0,
+        ignored_total=0,
+        pending_tolerance_total=0,
+        reportable_failures_total=0,
+    )
+    conn.close()
+
+    app = build_app(jobs_root=tmp_path)
+    client = TestClient(app)
+    page = client.get("/dashboard")
+    assert page.status_code == 200
+    assert "last crawl" in page.text
+    assert "last check" in page.text
+    assert f"/dashboard/results/zzz/runs/{run_id}?task_type=crawl" in page.text
+    assert f"/dashboard/results/zzz/runs/{lc_id}?task_type=link_check" in page.text
+    assert "next crawl" not in page.text
+    assert "next check" not in page.text
 
 
 def test_dashboard_links_honor_proxy_root_path(tmp_path: Path) -> None:
