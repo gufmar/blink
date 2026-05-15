@@ -11,7 +11,7 @@ from app.auth.env_loader import load_env_file, session_secret_fingerprint
 from app.auth.mailer import smtp_configured
 from app.auth.passwords import hash_password
 from app.auth.repository import AuthRepository
-from app.config.loader import project_root
+from app.config.jobs_root import JobsRootOption, resolve_jobs_root
 from app.server.auth_routes import issue_password_token, maybe_send_setup_email
 from app.server.global_auth_db import connect_server_db, server_db_path
 
@@ -37,10 +37,6 @@ def user_group_options(
         load_env_file(env_file.resolve(), override=True)
 
 
-def _jobs_root_opt(jobs_root: Path | None) -> Path:
-    return (jobs_root if jobs_root is not None else project_root() / "jobs").resolve()
-
-
 def _repo_for(jobs_root: Path) -> AuthRepository:
     conn = connect_server_db(jobs_root)
     return AuthRepository(conn)
@@ -48,10 +44,10 @@ def _repo_for(jobs_root: Path) -> AuthRepository:
 
 @user_app.command("check")
 def user_check(
-    jobs_root: Path | None = typer.Option(None, "--jobs-root", help="Jobs directory (must match blink serve)."),
+    jobs_root: JobsRootOption = None,
 ) -> None:
     """Show auth DB path and session-secret fingerprint (compare with serve's environment)."""
-    root = _jobs_root_opt(jobs_root)
+    root = resolve_jobs_root(jobs_root)
     cfg = AuthConfig.from_env()
     db_path = server_db_path(root)
     typer.echo(f"jobs_root:           {root}")
@@ -77,16 +73,16 @@ def user_check(
     finally:
         conn.close()
     typer.echo(
-        "Tip: run this with the same --env-file and --jobs-root as systemd; "
-        "fingerprints must match or setup links show 'Invalid or expired link'."
+        "Tip: set BLINK_JOBS_ROOT and BLINK_SESSION_SECRET in /etc/blink/blink-serve.env (Option D: source that file); "
+        "fingerprints must match serve or setup links show 'Invalid or expired link'."
     )
 
 
 @user_app.command("list")
 def user_list(
-    jobs_root: Path | None = typer.Option(None, "--jobs-root", help="Jobs directory (default: <project>/jobs)."),
+    jobs_root: JobsRootOption = None,
 ) -> None:
-    root = _jobs_root_opt(jobs_root)
+    root = resolve_jobs_root(jobs_root)
     conn = connect_server_db(root)
     try:
         repo = AuthRepository(conn)
@@ -119,10 +115,10 @@ def user_list(
 @user_app.command("add")
 def user_add(
     email: str = typer.Argument(..., help="User email (login username)."),
-    jobs_root: Path | None = typer.Option(None, "--jobs-root"),
+    jobs_root: JobsRootOption = None,
     global_admin: bool = typer.Option(False, "--global-admin", help="Grant global admin."),
 ) -> None:
-    root = _jobs_root_opt(jobs_root)
+    root = resolve_jobs_root(jobs_root)
     cfg = AuthConfig.from_env()
     if not cfg.session_secret:
         typer.secho("BLINK_SESSION_SECRET must be set.", fg=typer.colors.RED, err=True)
@@ -157,9 +153,9 @@ def user_add(
 @user_app.command("delete")
 def user_delete(
     email: str = typer.Argument(...),
-    jobs_root: Path | None = typer.Option(None, "--jobs-root"),
+    jobs_root: JobsRootOption = None,
 ) -> None:
-    root = _jobs_root_opt(jobs_root)
+    root = resolve_jobs_root(jobs_root)
     conn = connect_server_db(root)
     try:
         repo = AuthRepository(conn)
@@ -175,9 +171,9 @@ def user_delete(
 def user_set_password(
     email: str = typer.Argument(...),
     password: str = typer.Option(..., "--password", prompt=True, hide_input=True, confirmation_prompt=True),
-    jobs_root: Path | None = typer.Option(None, "--jobs-root"),
+    jobs_root: JobsRootOption = None,
 ) -> None:
-    root = _jobs_root_opt(jobs_root)
+    root = resolve_jobs_root(jobs_root)
     conn = connect_server_db(root)
     try:
         repo = AuthRepository(conn)
@@ -194,9 +190,9 @@ def user_set_password(
 @user_app.command("reset-token")
 def user_reset_token(
     email: str = typer.Argument(...),
-    jobs_root: Path | None = typer.Option(None, "--jobs-root"),
+    jobs_root: JobsRootOption = None,
 ) -> None:
-    root = _jobs_root_opt(jobs_root)
+    root = resolve_jobs_root(jobs_root)
     cfg = AuthConfig.from_env()
     if not cfg.session_secret:
         typer.secho("BLINK_SESSION_SECRET must be set.", fg=typer.colors.RED, err=True)
@@ -238,9 +234,9 @@ def user_reset_token(
 def user_set_global_admin(
     email: str = typer.Argument(...),
     enabled: bool = typer.Option(True, "--enabled/--disabled"),
-    jobs_root: Path | None = typer.Option(None, "--jobs-root"),
+    jobs_root: JobsRootOption = None,
 ) -> None:
-    root = _jobs_root_opt(jobs_root)
+    root = resolve_jobs_root(jobs_root)
     conn = connect_server_db(root)
     try:
         repo = AuthRepository(conn)
@@ -259,12 +255,12 @@ def user_set_job_role(
     email: str = typer.Argument(...),
     job_id: str = typer.Argument(..., help="Job id (matches meta.job_id)."),
     role: str = typer.Argument(..., help="watcher | solver | job_admin"),
-    jobs_root: Path | None = typer.Option(None, "--jobs-root"),
+    jobs_root: JobsRootOption = None,
 ) -> None:
     if role not in _JOB_ROLES:
         typer.secho(f"role must be one of: {', '.join(_JOB_ROLES)}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
-    root = _jobs_root_opt(jobs_root)
+    root = resolve_jobs_root(jobs_root)
     conn = connect_server_db(root)
     try:
         repo = AuthRepository(conn)
@@ -282,9 +278,9 @@ def user_set_job_role(
 def user_clear_job_role(
     email: str = typer.Argument(...),
     job_id: str = typer.Argument(...),
-    jobs_root: Path | None = typer.Option(None, "--jobs-root"),
+    jobs_root: JobsRootOption = None,
 ) -> None:
-    root = _jobs_root_opt(jobs_root)
+    root = resolve_jobs_root(jobs_root)
     conn = connect_server_db(root)
     try:
         repo = AuthRepository(conn)
@@ -302,9 +298,9 @@ def user_clear_job_role(
 def user_link_slack(
     email: str = typer.Argument(...),
     slack_user_id: str = typer.Argument(..., help="Slack member id (e.g. U012AB3CD)."),
-    jobs_root: Path | None = typer.Option(None, "--jobs-root"),
+    jobs_root: JobsRootOption = None,
 ) -> None:
-    root = _jobs_root_opt(jobs_root)
+    root = resolve_jobs_root(jobs_root)
     conn = connect_server_db(root)
     try:
         repo = AuthRepository(conn)

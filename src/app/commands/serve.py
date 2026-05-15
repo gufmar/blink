@@ -7,6 +7,7 @@ from pathlib import Path
 
 import typer
 
+from app.config.jobs_root import JobsRootOption, resolve_jobs_root
 from app.config.loader import load_effective_job_config
 
 serve_app = typer.Typer(help="Run Blink HTTP server (Slack Events API).", invoke_without_command=True)
@@ -63,11 +64,7 @@ def _emit_route_registry_diagnostics(channel_routes: dict[str, Path]) -> None:
 def serve_main(
     host: str = typer.Option("127.0.0.1", "--host", help="Bind address."),
     port: int = typer.Option(8080, "--port", min=1, max=65535, help="Listen port."),
-    jobs_root: Path | None = typer.Option(
-        None,
-        "--jobs-root",
-        help="Directory containing <slug>.job.json files (default: <project>/jobs).",
-    ),
+    jobs_root: JobsRootOption = None,
     base_path: str = typer.Option(
         "",
         "--base-path",
@@ -85,10 +82,9 @@ def serve_main(
         )
         raise typer.Exit(code=1) from exc
 
-    from app.config.loader import project_root  # noqa: PLC0415
     from app.server.asgi import build_app  # noqa: PLC0415
 
-    root = jobs_root.resolve() if jobs_root is not None else project_root() / "jobs"
+    root = resolve_jobs_root(jobs_root)
     _emit_env_diagnostics(root)
     app = build_app(jobs_root=root, enable_scheduler=True, route_base_path=base_path)
     routes = getattr(app.state, "channel_routes", {})

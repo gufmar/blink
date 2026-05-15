@@ -9,17 +9,14 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from app.config.loader import load_effective_job_config, project_root
+from app.config.jobs_root import JobsRootOption, resolve_jobs_root
+from app.config.loader import load_effective_job_config
 from app.config.schema import validate_job_config
 from app.schedule.humanize import describe_schedule
 from app.schedule.service import BlinkSchedulerService
 
 schedule_app = typer.Typer(help="Inspect crawl/link-check schedules (declarative and runtime).")
 _console = Console()
-
-
-def _jobs_root(default: Path | None = None) -> Path:
-    return default if default is not None else project_root() / "jobs"
 
 
 def _slug_from_path(job_path: Path) -> str:
@@ -37,7 +34,7 @@ def _describe_job_schedule_table(title: str, rows: list[tuple[str, str]]) -> Tab
 
 
 def _gather_job_paths(job: Path | None, jobs_root: Path | None) -> list[Path]:
-    root = jobs_root.resolve() if jobs_root is not None else _jobs_root(None)
+    root = resolve_jobs_root(jobs_root)
     if job is not None:
         return [job.resolve()]
     paths = sorted(root.glob("*.job.json"))
@@ -47,11 +44,7 @@ def _gather_job_paths(job: Path | None, jobs_root: Path | None) -> list[Path]:
 @schedule_app.command("show")
 def schedule_show(
     job: Path | None = typer.Option(None, "--job", help="Single job JSON file."),
-    jobs_root: Path | None = typer.Option(
-        None,
-        "--jobs-root",
-        help="Directory of *.job.json (used when --job is omitted). Default: <project>/jobs.",
-    ),
+    jobs_root: JobsRootOption = None,
 ) -> None:
     """Print declarative schedule sections from job file(s)."""
     paths = _gather_job_paths(job, jobs_root)
@@ -84,11 +77,7 @@ def schedule_status(
         "--url",
         help="blink serve base URL (e.g. http://127.0.0.1:8080). If set, fetch /api/schedule.",
     ),
-    jobs_root: Path | None = typer.Option(
-        None,
-        "--jobs-root",
-        help="Without --url: load declarative config + scheduler.sqlite under this directory.",
-    ),
+    jobs_root: JobsRootOption = None,
     view: str = typer.Option(
         "timeline",
         "--view",
@@ -106,7 +95,7 @@ def schedule_status(
             typer.secho(f"HTTP error: {exc}", fg=typer.colors.RED, err=True)
             raise typer.Exit(code=1) from exc
     else:
-        root = jobs_root.resolve() if jobs_root is not None else _jobs_root(None)
+        root = resolve_jobs_root(jobs_root)
         svc = BlinkSchedulerService(root)
         payload = svc.build_schedule_payload()
 

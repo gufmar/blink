@@ -28,6 +28,7 @@ from app.auth.permissions import (
     load_effective_access,
 )
 from app.auth.rate_limit import LoginRateLimiter
+from app.config.jobs_root import resolve_jobs_root
 from app.config.loader import load_effective_job_config, project_root
 from app.config.schema import validate_job_config
 from app.models.job_config import JobConfig
@@ -1849,7 +1850,7 @@ def build_app(
     enable_scheduler: bool = False,
     route_base_path: str = "",
 ) -> Starlette:
-    root = (jobs_root if jobs_root is not None else project_root() / "jobs").resolve()
+    root = resolve_jobs_root(jobs_root)
     routes, signing_env_name = _collect_channel_routes(root)
     scheduler_service = BlinkSchedulerService(root)
 

@@ -187,6 +187,7 @@ export BLINK_AUTH_PASSWORD=1          # email + password login
 export BLINK_SESSION_SECRET="$(openssl rand -hex 32)"
 export BLINK_PUBLIC_BASE_URL="http://127.0.0.1:8080"   # public origin; include mount path if proxied (e.g. https://host/blink)
 export BLINK_ROUTE_BASE_PATH=/blink   # optional; must match `blink serve --base-path` (for CLI setup links)
+export BLINK_JOBS_ROOT=/path/to/jobs   # optional; default <project>/jobs; use for CLI + serve when not passing --jobs-root
 ```
 
 Google (optional):
@@ -214,36 +215,41 @@ export BLINK_SMTP_FROM="blink@example.com"
 
 Keep secrets in a single root-owned file (example `/etc/blink/blink-serve.env`, mode `640`, group `blink`).
 
+Put shared paths in the same env file (example `/etc/blink/blink-serve.env`, mode `640`, group `blink`):
+
+```bash
+BLINK_JOBS_ROOT=/var/lib/blink/jobs
+BLINK_SESSION_SECRET=...
+BLINK_PUBLIC_BASE_URL=https://your.host/blink
+BLINK_ROUTE_BASE_PATH=/blink
+```
+
 **systemd** (`blink-serve.service`):
 
 ```ini
 EnvironmentFile=/etc/blink/blink-serve.env
-ExecStart=/path/to/blink serve --jobs-root /var/lib/blink/jobs --base-path /blink
+ExecStart=/path/to/blink serve --base-path /blink
 ```
 
-**CLI** (do not rely on your personal `~/.bashrc` for `BLINK_SESSION_SECRET`):
+(`BLINK_JOBS_ROOT` supplies the jobs directory; `--jobs-root` on the command line still overrides it.)
+
+**CLI** (Option D — source the file once per shell; do not duplicate secrets in `~/.bashrc`):
 
 ```bash
-sudo blink user check --env-file /etc/blink/blink-serve.env --jobs-root /var/lib/blink/jobs
-sudo blink user add admin@yourcompany.com --global-admin \
-  --env-file /etc/blink/blink-serve.env --jobs-root /var/lib/blink/jobs
+set -a && source /etc/blink/blink-serve.env && set +a
+blink user check
+blink user add admin@yourcompany.com --global-admin
 ```
 
-Or set `BLINK_ENV_FILE=/etc/blink/blink-serve.env` in your admin shell. `--env-file` overrides shell variables so tokens match the service.
+Optional: `blink user --env-file /etc/blink/blink-serve.env …` if you cannot add your user to group `blink`.
 
-If `source` on the env file fails with “permission denied”, use `--env-file` (Blink reads the file) or:
-
-```bash
-sudo bash -c 'set -a; . /etc/blink/blink-serve.env; set +a; blink user check --jobs-root /var/lib/blink/jobs'
-```
-
-Setup links fail with “Invalid or expired link” when the CLI **session fingerprint** from `blink user check` does not match what serve uses, or when `--jobs-root` differs.
+Setup links fail with “Invalid or expired link” when `BLINK_SESSION_SECRET` or `BLINK_JOBS_ROOT` differ between CLI and `blink serve`.
 
 ### Bootstrap first admin (before enabling auth on production)
 
 ```bash
-blink user add admin@yourcompany.com --global-admin \
-  --env-file /etc/blink/blink-serve.env --jobs-root /var/lib/blink/jobs
+# after: set -a && source /etc/blink/blink-serve.env && set +a
+blink user add admin@yourcompany.com --global-admin
 # note the one-time setup URL/token, set password via /auth/set-password
 ```
 
@@ -251,7 +257,7 @@ blink user add admin@yourcompany.com --global-admin \
 
 ```bash
 blink user check [--env-file <path>] [--jobs-root <dir>]
-blink user list [--jobs-root <dir>]
+blink user list
 blink user add <email> [--global-admin]
 blink user delete <email>
 blink user set-password <email> --password ...
