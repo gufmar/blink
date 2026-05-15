@@ -72,6 +72,48 @@ def test_password_login_and_session(tmp_path: Path, auth_env: None) -> None:
     assert "Signed in as" in r2.text
 
 
+def test_solver_sees_assigned_jobs_on_schedule_dashboard(tmp_path: Path, auth_env: None) -> None:
+    import re
+
+    root = Path(__file__).resolve().parents[2]
+    default_src = root / "jobs" / "_default.job.json"
+    for job_id in ("allowed", "secret"):
+        job_path = tmp_path / f"{job_id}.job.json"
+        shutil.copy(default_src, job_path)
+        data = json.loads(job_path.read_text(encoding="utf-8"))
+        data["meta"]["job_id"] = job_id
+        data["meta"]["name"] = f"Job {job_id}"
+        data["meta"]["enabled"] = True
+        data["notifications"]["enabled"] = False
+        job_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    conn = connect_server_db(tmp_path)
+    try:
+        repo = AuthRepository(conn)
+        repo.create_user(email="solver@example.com", password_hash=hash_password("password1234"))
+        repo.set_job_role(1, "allowed", "solver")
+    finally:
+        conn.close()
+
+    app = build_app(jobs_root=tmp_path, enable_scheduler=False)
+    client = TestClient(app)
+    login = client.post(
+        "/auth/login",
+        data={"email": "solver@example.com", "password": "password1234"},
+        follow_redirects=False,
+    )
+    assert login.status_code == 302
+    page = client.get("/dashboard")
+    assert page.status_code == 200
+    metric_values = re.findall(r'<div class="value">([^<]+)</div>', page.text)
+    assert metric_values[0] == "1"
+    assert metric_values[1] == "1"
+    assert metric_values[2] == "1"
+    assert "Job allowed" in page.text
+    assert "Job secret" not in page.text
+    assert page.text.count('<div class="job-title-row">') == 1
+
+
 def test_job_forbidden_without_role(tmp_path: Path, auth_env: None) -> None:
     _minimal_job(tmp_path, "allowed")
     _minimal_job(tmp_path, "secret")

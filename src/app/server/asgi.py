@@ -55,6 +55,7 @@ from app.server.dashboard_page import (
     render_results_structure_html,
     render_schedule_dashboard_html,
 )
+from app.server.job_catalog import list_disk_job_ids
 from app.server.runtime_diagnostics import build_runtime_diagnostics
 
 _SLUG_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
@@ -69,13 +70,7 @@ async def health(_: Request) -> JSONResponse:
 
 
 def _disk_job_ids(jobs_root: Path) -> frozenset[str]:
-    ids: set[str] = set()
-    for job_path in sorted(jobs_root.glob("*.job.json")):
-        if job_path.name.startswith("_"):
-            continue
-        stem = job_path.stem
-        ids.add(stem.removesuffix(".job") if stem.endswith(".job") else stem)
-    return frozenset(ids)
+    return list_disk_job_ids(jobs_root)
 
 
 def _page_links(request: Request, **extra: str) -> dict[str, str]:
@@ -111,8 +106,12 @@ async def api_schedule(request: Request) -> JSONResponse:
     payload = svc.build_schedule_payload()
     all_ids = _disk_job_ids(jobs_root)
     access = load_effective_access(request, all_disk_job_ids=all_ids)
+    filtered_tasks = list(payload.get("tasks") or [])
     if access is not None:
-        payload["tasks"] = filter_schedule_tasks(list(payload.get("tasks") or []), access, all_disk_job_ids=all_ids)
+        filtered_tasks = filter_schedule_tasks(filtered_tasks, access, all_disk_job_ids=all_ids)
+    payload["tasks"] = filtered_tasks
+    payload["crawl_tasks"] = [t for t in filtered_tasks if str(t.get("task_type") or "") == "crawl"]
+    payload["link_check_tasks"] = [t for t in filtered_tasks if str(t.get("task_type") or "") == "link_check"]
     return JSONResponse(payload)
 
 
@@ -648,8 +647,12 @@ async def schedule_dashboard(request: Request) -> HTMLResponse:
     jobs_root: Path = request.app.state.jobs_root
     all_ids = _disk_job_ids(jobs_root)
     access = load_effective_access(request, all_disk_job_ids=all_ids)
+    filtered_tasks = list(payload.get("tasks") or [])
     if access is not None:
-        payload["tasks"] = filter_schedule_tasks(list(payload.get("tasks") or []), access, all_disk_job_ids=all_ids)
+        filtered_tasks = filter_schedule_tasks(filtered_tasks, access, all_disk_job_ids=all_ids)
+    payload["tasks"] = filtered_tasks
+    payload["crawl_tasks"] = [t for t in filtered_tasks if str(t.get("task_type") or "") == "crawl"]
+    payload["link_check_tasks"] = [t for t in filtered_tasks if str(t.get("task_type") or "") == "link_check"]
     jobs = filter_jobs_for_access(_load_job_entries(jobs_root), access, all_disk_job_ids=all_ids)
     job_meta: dict[str, dict[str, Any]] = {}
     for job in jobs:
@@ -720,6 +723,8 @@ async def schedule_dashboard(request: Request) -> HTMLResponse:
         )
     payload["job_rows"] = job_rows
     payload["job_count"] = len(jobs)
+    payload["scheduled_crawl_count"] = sum(1 for row in job_rows if row.get("crawl"))
+    payload["scheduled_link_check_count"] = sum(1 for row in job_rows if row.get("link_check"))
     payload["show_admin_runtime"] = _can_view_admin_runtime(request)
     page_links = {
         "health": _path_for(request, "health"),

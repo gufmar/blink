@@ -111,9 +111,9 @@ def render_admin_runtime_html(*, diagnostics: dict[str, Any], links: dict[str, s
 
 def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, str]) -> str:
     """Build scheduler dashboard HTML using request-aware links."""
-    crawl_n = len(payload.get("crawl_tasks") or [])
-    link_n = len(payload.get("link_check_tasks") or [])
     job_count = int(payload.get("job_count") or 0)
+    crawl_n = int(payload.get("scheduled_crawl_count", len(payload.get("crawl_tasks") or [])))
+    link_n = int(payload.get("scheduled_link_check_count", len(payload.get("link_check_tasks") or [])))
     scheduler_on = bool(payload.get("scheduler_running"))
     show_admin_link = bool(payload.get("show_admin_runtime"))
 

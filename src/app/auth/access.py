@@ -9,17 +9,11 @@ from starlette.responses import HTMLResponse, JSONResponse, Response
 
 from app.auth.middleware import render_auth_error_html
 from app.auth.permissions import EffectiveAccess, load_effective_access
+from app.server.job_catalog import list_disk_job_ids
 
 
 def _all_job_ids(jobs_root: Path) -> frozenset[str]:
-    ids: set[str] = set()
-    for job_path in sorted(jobs_root.glob("*.job.json")):
-        if job_path.name.startswith("_"):
-            continue
-        stem = job_path.stem
-        job_id = stem.removesuffix(".job") if stem.endswith(".job") else stem
-        ids.add(job_id)
-    return frozenset(ids)
+    return list_disk_job_ids(jobs_root)
 
 
 def require_job_access(
