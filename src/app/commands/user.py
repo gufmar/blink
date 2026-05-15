@@ -7,16 +7,34 @@ from pathlib import Path
 import typer
 
 from app.auth.config import AuthConfig
+from app.auth.env_loader import load_env_file, session_secret_fingerprint
 from app.auth.mailer import smtp_configured
 from app.auth.passwords import hash_password
 from app.auth.repository import AuthRepository
 from app.config.loader import project_root
 from app.server.auth_routes import issue_password_token, maybe_send_setup_email
-from app.server.global_auth_db import connect_server_db
+from app.server.global_auth_db import connect_server_db, server_db_path
 
 user_app = typer.Typer(help="Manage Blink dashboard users (global server DB).")
 
 _JOB_ROLES = ("watcher", "solver", "job_admin")
+
+
+@user_app.callback()
+def user_group_options(
+    env_file: Path | None = typer.Option(
+        None,
+        "--env-file",
+        envvar="BLINK_ENV_FILE",
+        help="Load variables from a file (e.g. systemd EnvironmentFile). Overrides your shell env.",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+    ),
+) -> None:
+    """Shared options for all ``blink user`` subcommands."""
+    if env_file is not None:
+        load_env_file(env_file.resolve(), override=True)
 
 
 def _jobs_root_opt(jobs_root: Path | None) -> Path:
@@ -26,6 +44,42 @@ def _jobs_root_opt(jobs_root: Path | None) -> Path:
 def _repo_for(jobs_root: Path) -> AuthRepository:
     conn = connect_server_db(jobs_root)
     return AuthRepository(conn)
+
+
+@user_app.command("check")
+def user_check(
+    jobs_root: Path | None = typer.Option(None, "--jobs-root", help="Jobs directory (must match blink serve)."),
+) -> None:
+    """Show auth DB path and session-secret fingerprint (compare with serve's environment)."""
+    root = _jobs_root_opt(jobs_root)
+    cfg = AuthConfig.from_env()
+    db_path = server_db_path(root)
+    typer.echo(f"jobs_root:           {root}")
+    typer.echo(f"server.sqlite:       {db_path} ({'exists' if db_path.is_file() else 'missing'})")
+    typer.echo(f"session fingerprint: {session_secret_fingerprint(cfg.session_secret)}")
+    typer.echo(f"public_base_url:     {cfg.public_base_url}")
+    typer.echo(f"route_base_path:     {cfg.route_base_path or '(none)'}")
+    if not cfg.session_secret:
+        typer.secho("BLINK_SESSION_SECRET is not set — tokens from this shell will not match serve.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    if not db_path.is_file():
+        typer.secho("No server.sqlite yet — create a user first or fix --jobs-root.", fg=typer.colors.YELLOW)
+    conn = connect_server_db(root)
+    try:
+        pending = conn.execute(
+            """
+            SELECT COUNT(*) AS n FROM auth_tokens
+            WHERE used_at IS NULL AND expires_at > datetime('now')
+            """
+        ).fetchone()
+        n = int(pending["n"]) if pending else 0
+        typer.echo(f"pending setup/reset tokens: {n}")
+    finally:
+        conn.close()
+    typer.echo(
+        "Tip: run this with the same --env-file and --jobs-root as systemd; "
+        "fingerprints must match or setup links show 'Invalid or expired link'."
+    )
 
 
 @user_app.command("list")

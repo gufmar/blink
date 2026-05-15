@@ -26,6 +26,18 @@ def _esc(s: object) -> str:
     return html.escape("" if s is None else str(s))
 
 
+def _invalid_token_message() -> str:
+    return (
+        "Invalid or expired link.\n\n"
+        "Common causes:\n"
+        "• The link was already used or is older than 72 hours.\n"
+        "• blink user was run with a different BLINK_SESSION_SECRET than blink serve "
+        "(compare: blink user check --env-file /etc/blink/blink-serve.env).\n"
+        "• blink user used a different --jobs-root than the running server.\n"
+        "• The token was truncated when copied (paste the full URL from the CLI)."
+    )
+
+
 def _abs_url(request: Request, path: str) -> str:
     cfg: AuthConfig = request.app.state.auth_config
     return absolute_public_url(request, path, public_base_url=cfg.public_base_url)
@@ -149,7 +161,7 @@ async def set_password_page(request: Request) -> HTMLResponse:
     try:
         row = repo.get_auth_token_row(th)
         if row is None or row["used_at"] is not None or is_expired(str(row["expires_at"])):
-            return HTMLResponse("Invalid or expired link", status_code=400)
+            return HTMLResponse(_invalid_token_message(), status_code=400)
     finally:
         _close_auth_conn(request)
     action = _esc(_abs_url(request, "/auth/set-password"))
@@ -177,11 +189,11 @@ async def set_password_post(request: Request) -> Response:
     try:
         row = repo.get_auth_token_row(th)
         if row is None or row["used_at"] is not None or is_expired(str(row["expires_at"])):
-            return HTMLResponse("Invalid or expired link", status_code=400)
+            return HTMLResponse(_invalid_token_message(), status_code=400)
         user_id = int(row["user_id"])
         consumed = repo.consume_auth_token(th)
         if consumed is None:
-            return HTMLResponse("Invalid or expired link", status_code=400)
+            return HTMLResponse(_invalid_token_message(), status_code=400)
         repo.set_password_hash(user_id, hash_password(password))
         user = repo.get_user_by_id(user_id)
         if user:
