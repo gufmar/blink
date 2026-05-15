@@ -1849,10 +1849,14 @@ def build_app(
     jobs_root: Path | None = None,
     enable_scheduler: bool = False,
     route_base_path: str = "",
+    scheduler_max_concurrent_tasks: int | None = None,
 ) -> Starlette:
+    from app.schedule.runtime_config import SchedulerRuntimeConfig
+
     root = resolve_jobs_root(jobs_root)
     routes, signing_env_name = _collect_channel_routes(root)
-    scheduler_service = BlinkSchedulerService(root)
+    runtime = SchedulerRuntimeConfig.resolve(max_concurrent_tasks=scheduler_max_concurrent_tasks)
+    scheduler_service = BlinkSchedulerService(root, runtime_config=runtime)
 
     @asynccontextmanager
     async def lifespan(app: Starlette):

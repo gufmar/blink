@@ -579,7 +579,8 @@
         "expression": { "type": "string", "minLength": 1 },
         "jitter_seconds": { "type": "integer", "minimum": 0 },
         "max_runtime_seconds": { "type": "integer", "minimum": 1 },
-        "startup_delay_seconds": { "type": "integer", "minimum": 0 }
+        "startup_delay_seconds": { "type": "integer", "minimum": 0 },
+        "phase_offset_seconds": { "type": "integer", "minimum": 0, "default": 0 }
       }
     },
     "notificationDestination": {

@@ -107,6 +107,10 @@ def _render_status_payload(payload: dict, *, view: str) -> None:
     sr = payload.get("scheduler_running")
     typer.echo(f"jobs_root={jr}")
     typer.echo(f"scheduler_running={sr}")
+    sched = payload.get("scheduler") or {}
+    if sched:
+        typer.echo(f"max_concurrent_tasks={sched.get('max_concurrent_tasks', 0)}")
+        typer.echo(f"queued_tasks={sched.get('queued_tasks', 0)}")
 
     tasks: list[dict] = list(payload.get("tasks") or [])
     crawl = list(payload.get("crawl_tasks") or [])

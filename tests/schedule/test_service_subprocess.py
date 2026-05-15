@@ -39,7 +39,7 @@ def test_execute_task_records_finish(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     mock.return_value = MagicMock(returncode=0, stderr="")
     monkeypatch.setattr("app.schedule.service.run_scheduled_task", mock)
 
-    svc._execute_task(entry, "crawl", entry.config["schedule"]["crawl"])
+    svc._run_task_body(entry, "crawl", entry.config["schedule"]["crawl"])
 
     mock.assert_called_once()
     st = svc._store.get(entry.job_id, "crawl")
@@ -59,7 +59,7 @@ def test_execute_task_timeout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
 
     monkeypatch.setattr("app.schedule.service.run_scheduled_task", boom)
 
-    svc._execute_task(entry, "crawl", entry.config["schedule"]["crawl"])
+    svc._run_task_body(entry, "crawl", entry.config["schedule"]["crawl"])
 
     st = svc._store.get(entry.job_id, "crawl")
     assert st is not None

@@ -13,6 +13,7 @@ def describe_task(task: ScheduleTaskConfig, *, label: str) -> list[tuple[str, st
     rows.append((f"{label} jitter_seconds", str(task["jitter_seconds"])))
     rows.append((f"{label} max_runtime_seconds", str(task["max_runtime_seconds"])))
     rows.append((f"{label} startup_delay_seconds", str(task["startup_delay_seconds"])))
+    rows.append((f"{label} phase_offset_seconds", str(task.get("phase_offset_seconds", 0))))
     return rows
 
 

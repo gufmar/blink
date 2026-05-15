@@ -33,6 +33,7 @@ def test_api_schedule_returns_payload(tmp_path: Path) -> None:
     assert payload["jobs_root"] == str(tmp_path.resolve())
     assert "tasks" in payload and isinstance(payload["tasks"], list)
     assert "scheduler_running" in payload
+    assert payload.get("scheduler", {}).get("max_concurrent_tasks") == 0
 
 
 def test_dashboard_ok(tmp_path: Path) -> None:

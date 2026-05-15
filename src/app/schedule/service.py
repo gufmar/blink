@@ -13,9 +13,11 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from loguru import logger
 
 from app.models.job_config import ScheduleTaskConfig
+from app.schedule.concurrency import ScheduledTaskConcurrencyGate
 from app.schedule.maintenance import is_start_blocked_by_maintenance
 from app.schedule.registry import ScheduleRegistryEntry, load_registry
 from app.schedule.runner import run_scheduled_task
+from app.schedule.runtime_config import SchedulerRuntimeConfig
 from app.schedule.state import SchedulerStateStore
 from app.schedule.triggers import build_trigger
 from app.schedule.triggers import interval_seconds
@@ -62,6 +64,11 @@ def _parse_iso_utc(value: str | None) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
+def _task_phase_offset_seconds(task: ScheduleTaskConfig) -> int:
+    raw = task.get("phase_offset_seconds", 0)
+    return max(0, int(raw))
+
+
 def _has_finished_crawl_run(jobs_root: Path, job_id: str) -> bool:
     db_path = jobs_root / "data" / job_id / "db" / f"{job_id}.sqlite3"
     if not db_path.exists():
@@ -86,8 +93,15 @@ def _has_finished_crawl_run(jobs_root: Path, job_id: str) -> bool:
 class BlinkSchedulerService:
     """Owns BackgroundScheduler + SQLite state under ``jobs_root``."""
 
-    def __init__(self, jobs_root: Path | str) -> None:
+    def __init__(
+        self,
+        jobs_root: Path | str,
+        *,
+        runtime_config: SchedulerRuntimeConfig | None = None,
+    ) -> None:
         self.jobs_root = Path(jobs_root).resolve()
+        self._runtime = runtime_config or SchedulerRuntimeConfig.from_env()
+        self._concurrency = ScheduledTaskConcurrencyGate(self._runtime.max_concurrent_tasks)
         self._store = SchedulerStateStore(self.jobs_root)
         self._scheduler = BackgroundScheduler()
         self._started = False
@@ -142,8 +156,9 @@ class BlinkSchedulerService:
         cfg = entry.config
         sch = cfg["schedule"]
         delay = max(0, int(task["startup_delay_seconds"]))
+        phase = _task_phase_offset_seconds(task)
         now = datetime.now(tz=UTC)
-        not_before = now + timedelta(seconds=delay)
+        not_before = now + timedelta(seconds=delay + phase)
         # Preserve interval cadence over service restarts by aligning the next run
         # to the last known completion time when available.
         if task["mode"] == "interval":
@@ -166,7 +181,7 @@ class BlinkSchedulerService:
             return
 
         def tick() -> None:
-            self._execute_task(entry, task_type, task)
+            self._dispatch_task(entry, task_type, task)
 
         jid = self._job_ap_id(cfg["meta"]["job_id"], task_type)
         try:
@@ -187,7 +202,20 @@ class BlinkSchedulerService:
                 exc,
             )
 
-    def _execute_task(
+    def _dispatch_task(
+        self,
+        entry: ScheduleRegistryEntry,
+        task_type: TaskType,
+        task: ScheduleTaskConfig,
+    ) -> None:
+        job_id = entry.config["meta"]["job_id"]
+        self._concurrency.run(
+            job_id,
+            task_type,
+            lambda: self._run_task_body(entry, task_type, task),
+        )
+
+    def _run_task_body(
         self,
         entry: ScheduleRegistryEntry,
         task_type: TaskType,
@@ -294,6 +322,7 @@ class BlinkSchedulerService:
                     "jitter_seconds": tcfg["jitter_seconds"],
                     "max_runtime_seconds": tcfg["max_runtime_seconds"],
                     "startup_delay_seconds": tcfg["startup_delay_seconds"],
+                    "phase_offset_seconds": _task_phase_offset_seconds(tcfg),
                 }
                 row = {
                     "job_id": cfg["meta"]["job_id"],
@@ -322,6 +351,10 @@ class BlinkSchedulerService:
         return {
             "jobs_root": str(self.jobs_root),
             "scheduler_running": self._started,
+            "scheduler": {
+                "max_concurrent_tasks": self._runtime.max_concurrent_tasks,
+                "queued_tasks": self._concurrency.queued_count,
+            },
             "tasks": tasks,
             "crawl_tasks": crawl_tasks,
             "link_check_tasks": link_tasks,

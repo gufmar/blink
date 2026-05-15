@@ -70,6 +70,13 @@ def serve_main(
         "--base-path",
         help="Optional URL base path prefix for generated dashboard links (example: /blink).",
     ),
+    max_concurrent_scheduled_tasks: int | None = typer.Option(
+        None,
+        "--max-concurrent-scheduled-tasks",
+        min=0,
+        envvar="BLINK_SCHEDULER_MAX_CONCURRENT_TASKS",
+        help="Max crawl/link-check tasks running at once (0 = unlimited). Env: BLINK_SCHEDULER_MAX_CONCURRENT_TASKS.",
+    ),
 ) -> None:
     """Start uvicorn with Slack Events routes under /notifications/slack/."""
     try:
@@ -86,7 +93,18 @@ def serve_main(
 
     root = resolve_jobs_root(jobs_root)
     _emit_env_diagnostics(root)
-    app = build_app(jobs_root=root, enable_scheduler=True, route_base_path=base_path)
+    app = build_app(
+        jobs_root=root,
+        enable_scheduler=True,
+        route_base_path=base_path,
+        scheduler_max_concurrent_tasks=max_concurrent_scheduled_tasks,
+    )
+    runtime = app.state.scheduler_service._runtime  # noqa: SLF001
+    if runtime.max_concurrent_tasks > 0:
+        typer.secho(
+            f"Scheduler max concurrent tasks: {runtime.max_concurrent_tasks}",
+            fg=typer.colors.CYAN,
+        )
     routes = getattr(app.state, "channel_routes", {})
     if isinstance(routes, dict):
         _emit_route_registry_diagnostics(routes)

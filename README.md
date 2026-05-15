@@ -173,6 +173,10 @@ Each job’s `schedule` section defines **crawl** and **link-check** tasks (inte
 
 Maintenance windows (`schedule.maintenance_windows`) use standard five-field cron strings in `schedule.timezone`. Overlap policy **`skip`** is implemented: if a task is still running, the next tick is skipped.
 
+**Global concurrency:** set `BLINK_SCHEDULER_MAX_CONCURRENT_TASKS` or `blink serve --max-concurrent-scheduled-tasks N` (default `0` = unlimited) to cap how many scheduled tasks (crawl or link-check, any job) run at once. Additional ticks wait in an in-memory queue until a slot frees. `/api/schedule` reports `scheduler.max_concurrent_tasks` and `scheduler.queued_tasks`.
+
+**Staggering:** each schedule task may set optional `phase_offset_seconds` (added to `startup_delay_seconds` when computing the first/next anchor after service start). Use different offsets per job to spread jobs that share the same interval.
+
 ## Web UI authentication
 
 When enabled, `/dashboard` and `/api/*` require a signed session cookie. Slack webhook routes (`/notifications/slack/*`) stay on signing-secret verification only.

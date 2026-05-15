@@ -185,6 +185,7 @@ class ScheduleTaskConfig(TypedDict):
     jitter_seconds: int
     max_runtime_seconds: int
     startup_delay_seconds: int
+    phase_offset_seconds: int
 
 
 class MaintenanceWindowConfig(TypedDict):
