@@ -95,7 +95,7 @@
     }
   },
   "content": {
-    "history_keep": 8,
+    "history_keep": 5,
     "extract_main_text": true,
     "store_rendered_html": false,
     "main_text_extractor": "trafilatura",
@@ -143,7 +143,7 @@
       "settle_wait_seconds": 2,
       "wait_until": "commit",
       "accept_partial_success_on_navigation_timeout": true,
-      "restart_browser_every_n_checks": 0
+      "restart_browser_every_n_checks": 500
     },
     "preflight": {
       "enabled": true,
@@ -164,13 +164,17 @@
       ]
     },
     "hybrid": {
-      "retry_playwright_http_status": [403, 429, 503],
+      "retry_playwright_http_status": [
+        403,
+        429,
+        503
+      ],
       "retry_playwright_on_connection_error": false,
       "run_playwright_when_preflight_html": true,
       "run_playwright_when_http_ok_unknown_type": false
     },
     "write_json_report": true,
-    "save_failure_screenshot": true,
+    "save_failure_screenshot": false,
     "tolerance": {
       "by_category": {
         "client": {
