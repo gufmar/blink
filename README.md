@@ -185,7 +185,8 @@ User accounts and per-job roles live in `<jobs-root>/.blink/server.sqlite` (sepa
 export BLINK_AUTH_PASSWORD=1          # email + password login
 # export BLINK_AUTH_GOOGLE=1          # optional Google Workspace OIDC
 export BLINK_SESSION_SECRET="$(openssl rand -hex 32)"
-export BLINK_PUBLIC_BASE_URL="http://127.0.0.1:8080"   # used in setup/reset links and Google redirect URI
+export BLINK_PUBLIC_BASE_URL="http://127.0.0.1:8080"   # public origin; include mount path if proxied (e.g. https://host/blink)
+export BLINK_ROUTE_BASE_PATH=/blink   # optional; must match `blink serve --base-path` (for CLI setup links)
 ```
 
 Google (optional):

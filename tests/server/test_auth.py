@@ -90,6 +90,48 @@ def test_job_forbidden_without_role(tmp_path: Path, auth_env: None) -> None:
     assert r.status_code == 403
 
 
+def test_login_redirect_without_double_base_path(tmp_path: Path, auth_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    _minimal_job(tmp_path)
+    monkeypatch.setenv("BLINK_PUBLIC_BASE_URL", "https://hey.cardano.org/blink")
+    app = build_app(jobs_root=tmp_path, route_base_path="/blink")
+    client = TestClient(app, root_path="/blink")
+    r = client.get("/dashboard", follow_redirects=False)
+    assert r.status_code == 302
+    location = r.headers["location"]
+    assert "/blink/blink" not in location
+    assert location.startswith("/blink/auth/login")
+    assert "next=%2Fblink%2Fdashboard" in location
+
+
+def test_setup_token_with_route_base_path(tmp_path: Path, auth_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.auth.config import AuthConfig
+    from app.server.auth_routes import issue_password_token
+
+    monkeypatch.setenv("BLINK_PUBLIC_BASE_URL", "https://hey.cardano.org")
+    monkeypatch.setenv("BLINK_ROUTE_BASE_PATH", "/blink")
+    cfg = AuthConfig.from_env()
+    conn = connect_server_db(tmp_path)
+    try:
+        repo = AuthRepository(conn)
+        uid = repo.create_user(email="u@example.com")
+        raw, link = issue_password_token(
+            repo,
+            user_id=uid,
+            purpose="password_setup",
+            session_secret=cfg.session_secret or "",
+            public_url=cfg.public_base_url,
+            route_base_path=cfg.route_base_path,
+        )
+        assert link.startswith("https://hey.cardano.org/blink/auth/set-password?token=")
+        app = build_app(jobs_root=tmp_path, route_base_path="/blink")
+        client = TestClient(app, root_path="/blink")
+        r = client.get(f"/auth/set-password?token={raw}")
+        assert r.status_code == 200
+        assert "Set password" in r.text
+    finally:
+        conn.close()
+
+
 def test_blink_user_add_cli(tmp_path: Path, auth_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     from typer.testing import CliRunner

@@ -78,17 +78,17 @@ def _page_links(request: Request, **extra: str) -> dict[str, str]:
 
 
 def _auth_nav_links(request: Request) -> dict[str, str]:
+    from app.server.url_paths import external_path
+
     cfg: AuthConfig = request.app.state.auth_config
     if not cfg.any_enabled:
         return {}
-    prefix = _join_url_paths(
-        _normalize_base_path(getattr(request.app.state, "route_base_path", "")),
-        _normalize_base_path(str(request.scope.get("root_path") or "")),
-    )
-    logout = _join_url_paths(prefix, "/auth/logout") if prefix != "/" else "/auth/logout"
-    login = _join_url_paths(prefix, "/auth/login") if prefix != "/" else "/auth/login"
     email = str(request.session.get("email") or "")
-    return {"auth_user": email, "auth_logout": logout, "auth_login": login}
+    return {
+        "auth_user": email,
+        "auth_logout": external_path(request, "/auth/logout"),
+        "auth_login": external_path(request, "/auth/login"),
+    }
 
 
 async def api_schedule(request: Request) -> JSONResponse:

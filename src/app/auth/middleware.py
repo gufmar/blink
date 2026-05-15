@@ -10,50 +10,25 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
 
 from app.auth.config import AuthConfig
-
-
-def _normalize_path(path: str) -> str:
-    if not path:
-        return "/"
-    if path != "/" and path.endswith("/"):
-        return path.rstrip("/")
-    return path
+from app.server.url_paths import external_path
 
 
 def _is_public_path(path: str) -> bool:
-    p = _normalize_path(path)
-    if p == "/health" or p.startswith("/notifications/slack"):
+    if path == "/health" or path.startswith("/notifications/slack"):
         return True
-    if p.startswith("/static"):
+    if path.startswith("/static"):
         return True
-    if p.startswith("/auth"):
+    if path.startswith("/auth"):
         return True
     return False
 
 
 def _login_redirect_url(request: Request) -> str:
-    cfg: AuthConfig = request.app.state.auth_config
-    base = _normalize_base_path(getattr(request.app.state, "route_base_path", ""))
-    root = _normalize_base_path(str(request.scope.get("root_path") or ""))
-    login_path = "/auth/login"
-    if base and root.startswith(base):
-        prefix = root
-    else:
-        parts = [base, root]
-        prefix = "/".join(x.strip("/") for x in parts if x.strip("/"))
-    if prefix:
-        login_path = f"{prefix}{login_path}"
-    nxt = request.url.path
+    login = external_path(request, "/auth/login")
+    nxt = external_path(request, request.url.path)
     if request.url.query:
         nxt = f"{nxt}?{request.url.query}"
-    return f"{login_path}?next={quote(nxt, safe='')}"
-
-
-def _normalize_base_path(value: str | None) -> str:
-    if not value:
-        return ""
-    trimmed = value.strip().strip("/")
-    return f"/{trimmed}" if trimmed else ""
+    return f"{login}?next={quote(nxt, safe='')}"
 
 
 class AuthMiddleware(BaseHTTPMiddleware):

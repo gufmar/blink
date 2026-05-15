@@ -17,6 +17,7 @@ class AuthConfig:
     session_secret: str | None
     session_https_only: bool
     public_base_url: str
+    route_base_path: str
     google_client_id: str | None
     google_client_secret: str | None
     google_allowed_hd: str | None
@@ -56,6 +57,7 @@ class AuthConfig:
             session_secret=os.getenv("BLINK_SESSION_SECRET", "").strip() or None,
             session_https_only=_truthy("BLINK_SESSION_HTTPS_ONLY"),
             public_base_url=os.getenv("BLINK_PUBLIC_BASE_URL", "http://127.0.0.1:8080").rstrip("/"),
+            route_base_path=os.getenv("BLINK_ROUTE_BASE_PATH", "").strip(),
             google_client_id=os.getenv("BLINK_GOOGLE_CLIENT_ID", "").strip() or None,
             google_client_secret=os.getenv("BLINK_GOOGLE_CLIENT_SECRET", "").strip() or None,
             google_allowed_hd=os.getenv("BLINK_GOOGLE_ALLOWED_HD", "").strip() or None,

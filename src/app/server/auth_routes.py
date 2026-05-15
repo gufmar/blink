@@ -6,13 +6,14 @@ import html
 import secrets
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlencode, urlsplit
+from urllib.parse import quote, urlencode
 
 import httpx
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from app.auth.config import AuthConfig
+from app.server.url_paths import absolute_public_url, cli_public_link, external_path
 from app.auth.mailer import send_email, smtp_configured
 from app.auth.passwords import hash_password, verify_password
 from app.auth.rate_limit import LoginRateLimiter
@@ -25,29 +26,9 @@ def _esc(s: object) -> str:
     return html.escape("" if s is None else str(s))
 
 
-def _normalize_base_path(value: str | None) -> str:
-    if not value:
-        return ""
-    trimmed = value.strip().strip("/")
-    return f"/{trimmed}" if trimmed else ""
-
-
-def _url_prefix(request: Request) -> str:
-    base = _normalize_base_path(getattr(request.app.state, "route_base_path", ""))
-    root = _normalize_base_path(str(request.scope.get("root_path") or ""))
-    if base and root.startswith(base):
-        return root
-    parts = [base, root]
-    return "/" + "/".join(x.strip("/") for x in parts if x.strip("/")) if any(x.strip("/") for x in parts) else ""
-
-
 def _abs_url(request: Request, path: str) -> str:
     cfg: AuthConfig = request.app.state.auth_config
-    prefix = _url_prefix(request)
-    rel = path if path.startswith("/") else f"/{path}"
-    if prefix:
-        rel = f"{prefix}{rel}"
-    return f"{cfg.public_base_url.rstrip('/')}{rel}"
+    return absolute_public_url(request, path, public_base_url=cfg.public_base_url)
 
 
 def _repo(request: Request) -> AuthRepository:
@@ -89,7 +70,8 @@ async def login_page(request: Request) -> HTMLResponse:
         google_btn = f'<p><a class="btn" href="{_esc(_abs_url(request, "/auth/google/start"))}">Sign in with Google</a></p>'
     pwd_form = ""
     if cfg.password_enabled:
-        nxt = _esc(request.query_params.get("next", "/dashboard"))
+        default_next = external_path(request, "/dashboard")
+        nxt = _esc(request.query_params.get("next", default_next))
         pwd_form = f"""
 <form method="post" action="{_esc(_abs_url(request, "/auth/login"))}">
   <input type="hidden" name="next" value="{nxt}"/>
@@ -117,7 +99,7 @@ async def login_post(request: Request) -> Response:
     form = await request.form()
     email = str(form.get("email") or "").strip().lower()
     password = str(form.get("password") or "")
-    nxt = str(form.get("next") or "/dashboard")
+    nxt = str(form.get("next") or external_path(request, "/dashboard"))
     ip = _client_ip(request)
     limiter = _rate_limiter(request)
     if limiter.is_blocked(ip):
@@ -139,7 +121,9 @@ async def login_post(request: Request) -> Response:
         limiter.reset(ip)
         request.session["user_id"] = user.id
         request.session["email"] = user.email
-        return RedirectResponse(nxt if nxt.startswith("/") else "/dashboard", status_code=302)
+        if not nxt.startswith("/"):
+            nxt = external_path(request, "/dashboard")
+        return RedirectResponse(nxt, status_code=302)
     finally:
         _close_auth_conn(request)
 
@@ -203,7 +187,7 @@ async def set_password_post(request: Request) -> Response:
         if user:
             request.session["user_id"] = user.id
             request.session["email"] = user.email
-        return RedirectResponse("/dashboard", status_code=302)
+        return RedirectResponse(external_path(request, "/dashboard"), status_code=302)
     finally:
         _close_auth_conn(request)
 
@@ -302,7 +286,7 @@ async def google_callback(request: Request) -> Response:
             return RedirectResponse(_abs_url(request, "/auth/login?error=invalid"), status_code=302)
         request.session["user_id"] = user.id
         request.session["email"] = user.email
-        return RedirectResponse("/dashboard", status_code=302)
+        return RedirectResponse(external_path(request, "/dashboard"), status_code=302)
     finally:
         _close_auth_conn(request)
 
@@ -314,6 +298,7 @@ def issue_password_token(
     purpose: str,
     session_secret: str,
     public_url: str,
+    route_base_path: str = "",
 ) -> tuple[str, str]:
     raw = generate_raw_token()
     th = hash_token(session_secret, raw)
@@ -324,7 +309,8 @@ def issue_password_token(
         expires_at_iso=token_expiry_iso(hours=72),
     )
     path = f"/auth/set-password?token={quote(raw, safe='')}"
-    return raw, f"{public_url.rstrip('/')}{path}"
+    link = cli_public_link(public_url, route_base_path, path)
+    return raw, link
 
 
 def maybe_send_setup_email(cfg: AuthConfig, *, to_email: str, link: str) -> bool:

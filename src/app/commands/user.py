@@ -86,6 +86,7 @@ def user_add(
             purpose="password_setup",
             session_secret=cfg.session_secret,
             public_url=cfg.public_base_url,
+            route_base_path=cfg.route_base_path,
         )
         sent = maybe_send_setup_email(cfg, to_email=email.strip().lower(), link=link)
         typer.secho(f"Created user {email} (id={uid}).", fg=typer.colors.GREEN)
@@ -159,6 +160,7 @@ def user_reset_token(
             purpose="password_reset",
             session_secret=cfg.session_secret,
             public_url=cfg.public_base_url,
+            route_base_path=cfg.route_base_path,
         )
         if smtp_configured(cfg):
             from app.auth.mailer import send_email
