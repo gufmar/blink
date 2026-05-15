@@ -19,11 +19,68 @@ from app.auth.passwords import hash_password, verify_password
 from app.auth.rate_limit import LoginRateLimiter
 from app.auth.repository import AuthRepository
 from app.auth.tokens import generate_raw_token, hash_token, is_expired, token_expiry_iso
+from app.server.dashboard_page import esc as html_esc
+from app.server.dashboard_page import render_auth_page
 from app.server.global_auth_db import connect_server_db
+
+_MIN_PASSWORD_LEN = 10
 
 
 def _esc(s: object) -> str:
     return html.escape("" if s is None else str(s))
+
+
+def _branding_links(request: Request) -> dict[str, str]:
+    from app.server.asgi import _branding_links
+
+    return _branding_links(request)
+
+
+def _validate_password_pair(password: str, password_confirm: str) -> str | None:
+    if len(password) < _MIN_PASSWORD_LEN:
+        return f"Password must be at least {_MIN_PASSWORD_LEN} characters."
+    if password != password_confirm:
+        return "Passwords do not match."
+    return None
+
+
+def _invalid_token_html(request: Request) -> str:
+    return render_auth_page(
+        title="Blink · Invalid link",
+        heading="Link not valid",
+        subtitle="This setup or reset link cannot be used.",
+        panel_title="What to do",
+        panel_body_html=f'<div class="auth-plain-error">{html_esc(_invalid_token_message())}</div>',
+        branding_links=_branding_links(request),
+        nav_links=[("Sign in", _abs_url(request, "/auth/login"))],
+    )
+
+
+def _render_set_password_form(request: Request, token: str, *, error: str | None = None) -> str:
+    action = _abs_url(request, "/auth/set-password")
+    err_html = f'<p class="auth-err">{html_esc(error)}</p>' if error else ""
+    form_body = f"""
+<div class="auth-form">
+  <p class="auth-notice"><strong>One-time link.</strong> This URL and token work only once. After you save a password, the link cannot be used again. The link expires after 72 hours.</p>
+  {err_html}
+  <form method="post" action="{html_esc(action)}">
+    <input type="hidden" name="token" value="{html_esc(token)}"/>
+    <label for="password">New password</label>
+    <input id="password" type="password" name="password" required minlength="{_MIN_PASSWORD_LEN}" autocomplete="new-password"/>
+    <label for="password_confirm">Confirm password</label>
+    <input id="password_confirm" type="password" name="password_confirm" required minlength="{_MIN_PASSWORD_LEN}" autocomplete="new-password"/>
+    <button type="submit">Save password</button>
+  </form>
+</div>"""
+    return render_auth_page(
+        title="Blink · Set password",
+        heading="Set your password",
+        subtitle="Choose a password for your Blink account.",
+        panel_title="Account setup",
+        panel_body_html=form_body,
+        branding_links=_branding_links(request),
+        nav_links=[("Sign in", _abs_url(request, "/auth/login"))],
+    )
 
 
 def _invalid_token_message() -> str:
@@ -153,7 +210,18 @@ async def logout_get(request: Request) -> Response:
 async def set_password_page(request: Request) -> HTMLResponse:
     raw = str(request.query_params.get("token") or "").strip()
     if not raw:
-        return HTMLResponse("Missing token", status_code=400)
+        return HTMLResponse(
+            render_auth_page(
+                title="Blink · Missing token",
+                heading="Missing token",
+                subtitle="No setup token was provided.",
+                panel_title="Error",
+                panel_body_html='<div class="auth-plain-error">Open the full link from your invitation email or CLI output.</div>',
+                branding_links=_branding_links(request),
+                nav_links=[("Sign in", _abs_url(request, "/auth/login"))],
+            ),
+            status_code=400,
+        )
     cfg: AuthConfig = request.app.state.auth_config
     secret = cfg.session_secret or ""
     th = hash_token(secret, raw)
@@ -161,19 +229,10 @@ async def set_password_page(request: Request) -> HTMLResponse:
     try:
         row = repo.get_auth_token_row(th)
         if row is None or row["used_at"] is not None or is_expired(str(row["expires_at"])):
-            return HTMLResponse(_invalid_token_message(), status_code=400)
+            return HTMLResponse(_invalid_token_html(request), status_code=400)
     finally:
         _close_auth_conn(request)
-    action = _esc(_abs_url(request, "/auth/set-password"))
-    return HTMLResponse(
-        f"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><title>Set password</title></head>
-<body><h1>Set password</h1>
-<form method="post" action="{action}">
-<input type="hidden" name="token" value="{_esc(raw)}"/>
-<label>New password <input type="password" name="password" required minlength="10"/></label>
-<button type="submit">Save</button>
-</form></body></html>"""
-    )
+    return HTMLResponse(_render_set_password_form(request, raw))
 
 
 async def set_password_post(request: Request) -> Response:
@@ -182,18 +241,30 @@ async def set_password_post(request: Request) -> Response:
     form = await request.form()
     raw = str(form.get("token") or "").strip()
     password = str(form.get("password") or "")
-    if len(password) < 10:
-        return HTMLResponse("Password too short (min 10 characters)", status_code=400)
+    password_confirm = str(form.get("password_confirm") or "")
+    pair_err = _validate_password_pair(password, password_confirm)
+    if pair_err:
+        if not raw:
+            return HTMLResponse(_invalid_token_html(request), status_code=400)
+        th_check = hash_token(secret, raw)
+        repo = _repo(request)
+        try:
+            row = repo.get_auth_token_row(th_check)
+            if row is None or row["used_at"] is not None or is_expired(str(row["expires_at"])):
+                return HTMLResponse(_invalid_token_html(request), status_code=400)
+        finally:
+            _close_auth_conn(request)
+        return HTMLResponse(_render_set_password_form(request, raw, error=pair_err), status_code=400)
     th = hash_token(secret, raw)
     repo = _repo(request)
     try:
         row = repo.get_auth_token_row(th)
         if row is None or row["used_at"] is not None or is_expired(str(row["expires_at"])):
-            return HTMLResponse(_invalid_token_message(), status_code=400)
+            return HTMLResponse(_invalid_token_html(request), status_code=400)
         user_id = int(row["user_id"])
         consumed = repo.consume_auth_token(th)
         if consumed is None:
-            return HTMLResponse(_invalid_token_message(), status_code=400)
+            return HTMLResponse(_invalid_token_html(request), status_code=400)
         repo.set_password_hash(user_id, hash_password(password))
         user = repo.get_user_by_id(user_id)
         if user:

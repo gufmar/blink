@@ -1535,6 +1535,68 @@ def _brand_header(links: dict[str, str]) -> str:
     )
 
 
+def _auth_form_styles() -> str:
+    return """
+<style>
+  .auth-form { padding: 1.25rem 1.5rem 1.5rem; max-width: 32rem; }
+  .auth-form label { display: block; margin: 0.85rem 0 0.35rem; font-size: 0.8rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+  .auth-form label:first-of-type { margin-top: 0; }
+  .auth-form input[type="email"],
+  .auth-form input[type="password"] { width: 100%; padding: 0.55rem 0.65rem; border: 1px solid var(--border); border-radius: 8px; font-size: 0.95rem; font-family: inherit; }
+  .auth-form input:focus { outline: 2px solid rgba(18, 31, 99, 0.25); border-color: var(--cardano-blue); }
+  .auth-form button[type="submit"] { margin-top: 1.35rem; padding: 0.6rem 1.35rem; background: var(--cardano-blue); color: #fff; border: none; border-radius: 8px; font-weight: 600; font-size: 0.9rem; cursor: pointer; }
+  .auth-form button[type="submit"]:hover { background: var(--cardano-blue-light); }
+  .auth-notice { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: var(--radius); padding: 0.9rem 1rem; margin-bottom: 0.25rem; font-size: 0.875rem; color: var(--text); line-height: 1.45; }
+  .auth-notice strong { color: var(--cardano-blue); }
+  .auth-err { color: var(--danger); margin-bottom: 0.75rem; font-size: 0.875rem; font-weight: 600; }
+  .auth-plain-error { padding: 1.25rem 1.5rem; font-size: 0.9rem; line-height: 1.55; white-space: pre-wrap; color: var(--text); }
+</style>
+"""
+
+
+def render_auth_page(
+    *,
+    title: str,
+    heading: str,
+    subtitle: str,
+    panel_title: str,
+    panel_body_html: str,
+    branding_links: dict[str, str],
+    nav_links: list[tuple[str, str]] | None = None,
+) -> str:
+    """Dashboard-styled shell for login / set-password pages."""
+    nav_links = nav_links or []
+    nav_html = "\n".join(f'<a href="{esc(href)}">{esc(label)}</a>' for label, href in nav_links if href)
+    gen_at = datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>{esc(title)}</title>
+  {_favicon_head(branding_links)}
+  {_shared_styles()}
+  {_auth_form_styles()}
+</head>
+<body>
+  <header class="hero">
+    <div class="hero-inner">
+      {_brand_header(branding_links)}
+      <h1>{esc(heading)}</h1>
+      <p>{esc(subtitle)}</p>
+      {f'<nav class="nav" aria-label="Navigation">{nav_html}</nav>' if nav_html else ''}
+    </div>
+  </header>
+  <div class="wrap">
+    <section class="panel" aria-label="{esc(panel_title)}">
+      <div class="panel-head">{esc(panel_title)}</div>
+      {panel_body_html}
+    </section>
+    <footer>Generated {esc(gen_at)}</footer>
+  </div>
+</body>
+</html>
+"""
 
 
 def _render_link_list(urls: list[str]) -> str:

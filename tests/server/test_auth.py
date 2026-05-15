@@ -127,7 +127,25 @@ def test_setup_token_with_route_base_path(tmp_path: Path, auth_env: None, monkey
         client = TestClient(app, root_path="/blink")
         r = client.get(f"/auth/set-password?token={raw}")
         assert r.status_code == 200
-        assert "Set password" in r.text
+        assert "Set your password" in r.text
+        assert 'name="password_confirm"' in r.text
+        assert "One-time link" in r.text
+        assert "cardano-blue" in r.text or "var(--cardano-blue)" in r.text
+
+        mismatch = client.post(
+            "/auth/set-password",
+            data={"token": raw, "password": "longpassword1", "password_confirm": "longpassword2"},
+        )
+        assert mismatch.status_code == 400
+        assert "Passwords do not match" in mismatch.text
+        assert 'name="password_confirm"' in mismatch.text
+
+        ok = client.post(
+            "/auth/set-password",
+            data={"token": raw, "password": "longpassword1", "password_confirm": "longpassword1"},
+            follow_redirects=False,
+        )
+        assert ok.status_code == 302
     finally:
         conn.close()
 
