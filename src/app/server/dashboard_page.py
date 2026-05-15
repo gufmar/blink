@@ -62,14 +62,60 @@ def _html_report_link_cell(run: dict[str, Any]) -> str:
     return _html_action_link(view_url, "json")
 
 
+def render_admin_runtime_html(*, diagnostics: dict[str, Any], links: dict[str, str]) -> str:
+    """Admin-only page for paths, scheduler runtime, and environment variables."""
+
+    def row_cells(label: str, value: object) -> str:
+        return f"<tr><td>{esc(label)}</td><td class=\"mono\">{esc(value)}</td></tr>"
+
+    empty_row = '<tr><td colspan="2" class="empty">—</td></tr>'
+    path_rows = "".join(row_cells(k, v) for k, v in list(diagnostics.get("paths") or [])) or empty_row
+    service_rows = "".join(row_cells(k, v) for k, v in list(diagnostics.get("service") or [])) or empty_row
+    env_rows_list: list[str] = []
+    for row in list(diagnostics.get("environment") or []):
+        if isinstance(row, dict):
+            env_rows_list.append(row_cells(str(row.get("name") or ""), row.get("value")))
+    env_rows = "".join(env_rows_list) or empty_row
+    body_extra = f"""
+<section class="panel" aria-label="Paths">
+  <div class="panel-head">Paths</div>
+  <table><tbody>{path_rows}</tbody></table>
+</section>
+<section class="panel" aria-label="Service">
+  <div class="panel-head">Service runtime</div>
+  <table><tbody>{service_rows}</tbody></table>
+</section>
+<section class="panel" aria-label="Environment">
+  <div class="panel-head">Environment variables</div>
+  <table><tbody>{env_rows}</tbody></table>
+</section>
+"""
+    return _render_results_shell(
+        title="Blink · Runtime",
+        heading="Runtime & environment",
+        subtitle="Admin diagnostics: paths, scheduler state, and masked environment values.",
+        nav_links=[
+            ("Main dashboard", links.get("main_dashboard", "")),
+            ("Schedule JSON", links.get("schedule_json", "")),
+        ],
+        panel_title="",
+        table_headers=[],
+        table_rows="",
+        footer_link=links.get("main_dashboard", ""),
+        footer_label="Back to dashboard",
+        body_extra=body_extra,
+        show_table_header=False,
+        branding_links=links,
+    )
+
+
 def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, str]) -> str:
     """Build scheduler dashboard HTML using request-aware links."""
-    tasks: list[dict[str, Any]] = list(payload.get("tasks") or [])
     crawl_n = len(payload.get("crawl_tasks") or [])
     link_n = len(payload.get("link_check_tasks") or [])
-    total = len(tasks)
+    job_count = int(payload.get("job_count") or 0)
     scheduler_on = bool(payload.get("scheduler_running"))
-    jobs_root = html.escape(str(payload.get("jobs_root") or ""))
+    show_admin_link = bool(payload.get("show_admin_runtime"))
 
     def esc(s: object) -> str:
         return html.escape("" if s is None else str(s))
@@ -263,12 +309,17 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
 
     job_rows = list(payload.get("job_rows") or [])
     rows = "\n".join(row_for(row) for row in job_rows) if job_rows else ""
-    empty_row = '<tr><td class="empty">No jobs found under jobs_root.</td></tr>'
+    empty_row = '<tr><td class="empty">No jobs found.</td></tr>'
 
     gen_at = datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
 
     status_class = "pill pill-on" if scheduler_on else "pill pill-off"
     status_label = "Running" if scheduler_on else "Stopped"
+    admin_footer_link = (
+        f' · <a href="{esc(links.get("admin_runtime", ""))}">Runtime &amp; environment</a>'
+        if show_admin_link and links.get("admin_runtime")
+        else ""
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -545,18 +596,29 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
     .dot-idle {{ background: var(--muted); }}
     .dot-ok {{ background: var(--success); }}
     .dot-fail {{ background: var(--danger); }}
-    footer {{
+    .dashboard-footer {{
       margin-top: 2rem;
       padding: 1rem 0;
       font-size: 0.75rem;
       color: var(--muted);
       text-align: center;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      gap: 0.75rem 1.25rem;
     }}
-    .jobs-root {{
-      word-break: break-all;
-      font-size: 0.75rem;
-      color: var(--muted);
-      margin-top: 0.75rem;
+    .auto-refresh-toggle {{
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      cursor: pointer;
+      user-select: none;
+    }}
+    .auto-refresh-toggle input {{
+      width: 1rem;
+      height: 1rem;
+      accent-color: var(--cardano-blue);
     }}
   </style>
 </head>
@@ -578,25 +640,22 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
   <div class="wrap">
     <section class="metrics" aria-label="Summary">
       <div class="metric">
-        <div class="value">{total}</div>
-        <div class="label">Scheduled tasks</div>
-        <div class="hint">Crawl + link-check rows</div>
+        <div class="value">{job_count}</div>
+        <div class="label">jobs</div>
       </div>
       <div class="metric">
         <div class="value">{crawl_n}</div>
-        <div class="label">Crawl</div>
+        <div class="label">scheduled crawls</div>
       </div>
       <div class="metric">
         <div class="value">{link_n}</div>
-        <div class="label">Link check</div>
+        <div class="label">scheduled link checks</div>
       </div>
       <div class="metric">
         <div class="value"><span class="{status_class}">{status_label}</span></div>
-        <div class="label">Scheduler thread</div>
-        <div class="hint">Started by blink serve</div>
+        <div class="label">service status</div>
       </div>
     </section>
-    <p class="jobs-root"><strong>jobs_root</strong> · {jobs_root}</p>
     <section class="panel" aria-label="Task table">
       <div class="panel-head">Task overview</div>
       <div class="panel-scroll">
@@ -612,7 +671,44 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
       </table>
       </div>
     </section>
-    <footer>Generated {esc(gen_at)} · <a href="{esc(links.get("schedule_refresh", ""))}">Refresh</a></footer>
+    <footer class="dashboard-footer">
+      <span class="footer-generated">Generated <span id="dashboardGeneratedAt">{esc(gen_at)}</span></span>
+      <label class="auto-refresh-toggle">
+        <input type="checkbox" id="dashboardAutoRefresh" aria-label="Auto-refresh every 15 seconds"/>
+        <span>Auto-refresh (15s)</span>
+      </label>{admin_footer_link}
+    </footer>
+<script>
+(function () {{
+  var STORAGE_KEY = "blink-dashboard-auto-refresh";
+  var INTERVAL_MS = 15000;
+  var toggle = document.getElementById("dashboardAutoRefresh");
+  if (!toggle) return;
+  var timer = null;
+  function start() {{
+    stop();
+    timer = window.setInterval(function () {{ window.location.reload(); }}, INTERVAL_MS);
+  }}
+  function stop() {{
+    if (timer !== null) {{
+      window.clearInterval(timer);
+      timer = null;
+    }}
+  }}
+  try {{
+    if (window.localStorage.getItem(STORAGE_KEY) === "1") {{
+      toggle.checked = true;
+      start();
+    }}
+  }} catch (e) {{}}
+  toggle.addEventListener("change", function () {{
+    try {{
+      window.localStorage.setItem(STORAGE_KEY, toggle.checked ? "1" : "0");
+    }} catch (e) {{}}
+    if (toggle.checked) start(); else stop();
+  }});
+}})();
+</script>
   </div>
 </body>
 </html>

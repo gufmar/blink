@@ -46,6 +46,7 @@ from app.schedule.service import BlinkSchedulerService
 from app.server.auth_routes import auth_route_handlers
 from app.server.dashboard_page import (
     esc as _html_esc,
+    render_admin_runtime_html,
     render_file_viewer_html,
     render_job_task_history_html,
     render_results_job_html,
@@ -54,6 +55,7 @@ from app.server.dashboard_page import (
     render_results_structure_html,
     render_schedule_dashboard_html,
 )
+from app.server.runtime_diagnostics import build_runtime_diagnostics
 
 _SLUG_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
 
@@ -78,6 +80,15 @@ def _disk_job_ids(jobs_root: Path) -> frozenset[str]:
 
 def _page_links(request: Request, **extra: str) -> dict[str, str]:
     return {**_branding_links(request), **_auth_nav_links(request), **extra}
+
+
+def _can_view_admin_runtime(request: Request) -> bool:
+    cfg: AuthConfig = request.app.state.auth_config
+    if not cfg.any_enabled:
+        return True
+    all_ids = _disk_job_ids(request.app.state.jobs_root)
+    access = load_effective_access(request, all_disk_job_ids=all_ids)
+    return access is not None and access.is_global_admin
 
 
 def _auth_nav_links(request: Request) -> dict[str, str]:
@@ -708,14 +719,41 @@ async def schedule_dashboard(request: Request) -> HTMLResponse:
             }
         )
     payload["job_rows"] = job_rows
-    page = render_schedule_dashboard_html(
-        payload,
+    payload["job_count"] = len(jobs)
+    payload["show_admin_runtime"] = _can_view_admin_runtime(request)
+    page_links = {
+        "health": _path_for(request, "health"),
+        "schedule_json": _path_for(request, "api_schedule"),
+        "slack_health": _path_for(request, "slack_health"),
+        "results_index": _path_for(request, "dashboard_results_jobs"),
+        "schedule_refresh": _path_for(request, "dashboard_schedule"),
+        **_page_links(request),
+    }
+    if payload["show_admin_runtime"]:
+        page_links["admin_runtime"] = _path_for(request, "dashboard_admin_runtime")
+    page = render_schedule_dashboard_html(payload, links=page_links)
+    return HTMLResponse(page)
+
+
+async def dashboard_admin_runtime(request: Request) -> HTMLResponse:
+    if not _can_view_admin_runtime(request):
+        return HTMLResponse("Forbidden", status_code=403)
+    jobs_root: Path = request.app.state.jobs_root
+    svc: BlinkSchedulerService = request.app.state.scheduler_service
+    schedule_payload = svc.build_schedule_payload()
+    diagnostics = build_runtime_diagnostics(
+        jobs_root=jobs_root,
+        route_base_path=str(getattr(request.app.state, "route_base_path", "") or ""),
+        enable_scheduler=bool(getattr(request.app.state, "enable_scheduler", False)),
+        scheduler_payload=schedule_payload,
+        signing_secret_env_name=str(getattr(request.app.state, "signing_secret_env_name", "") or ""),
+        channel_route_count=len(getattr(request.app.state, "channel_routes", {}) or {}),
+    )
+    page = render_admin_runtime_html(
+        diagnostics=diagnostics,
         links={
-            "health": _path_for(request, "health"),
+            "main_dashboard": _path_for(request, "dashboard_schedule"),
             "schedule_json": _path_for(request, "api_schedule"),
-            "slack_health": _path_for(request, "slack_health"),
-            "results_index": _path_for(request, "dashboard_results_jobs"),
-            "schedule_refresh": _path_for(request, "dashboard_schedule"),
             **_page_links(request),
         },
     )
@@ -2130,6 +2168,12 @@ def build_app(
                 name="api_results_run_page_main_text",
             ),
             Route("/dashboard", schedule_dashboard, methods=["GET"], name="dashboard_schedule"),
+            Route(
+                "/dashboard/admin/runtime",
+                dashboard_admin_runtime,
+                methods=["GET"],
+                name="dashboard_admin_runtime",
+            ),
             Route("/dashboard/results", dashboard_results_jobs, methods=["GET"], name="dashboard_results_jobs"),
             Route(
                 "/dashboard/results/{job_id}/crawls",
