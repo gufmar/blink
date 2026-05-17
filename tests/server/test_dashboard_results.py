@@ -251,14 +251,15 @@ def test_dashboard_results_pages(tmp_path: Path) -> None:
     assert "https://ignored.example.net" in run_page.text
     assert "Ignored link-check results (latest per target)" in run_page.text
     assert "Run summary" in run_page.text
-    assert "Main dashboard" in run_page.text
+    assert "< Dashboard" in run_page.text
+    assert "< job" in run_page.text
     assert "Apply filters" in run_page.text
     assert "Field" not in run_page.text
 
     structure_page = client.get(f"/dashboard/results/zzz/runs/{run_id}/structure")
     assert structure_page.status_code == 200
     assert "Radial tidy tree" in structure_page.text
-    assert "Structure JSON" in structure_page.text
+    assert "Website structure JSON" in structure_page.text
     assert "Open run details" in structure_page.text
     assert "page-main-text" in structure_page.text
     assert "id=\"structure-payload\"" in structure_page.text

@@ -31,9 +31,9 @@ def _esc(s: object) -> str:
 
 
 def _branding_links(request: Request) -> dict[str, str]:
-    from app.server.asgi import _branding_links
+    from app.server.asgi import _page_links
 
-    return _branding_links(request)
+    return _page_links(request)
 
 
 def _validate_password_pair(password: str, password_confirm: str) -> str | None:
@@ -52,7 +52,6 @@ def _invalid_token_html(request: Request) -> str:
         panel_title="What to do",
         panel_body_html=f'<div class="auth-plain-error">{html_esc(_invalid_token_message())}</div>',
         branding_links=_branding_links(request),
-        nav_links=[("Sign in", _abs_url(request, "/auth/login"))],
     )
 
 
@@ -79,7 +78,6 @@ def _render_set_password_form(request: Request, token: str, *, error: str | None
         panel_title="Account setup",
         panel_body_html=form_body,
         branding_links=_branding_links(request),
-        nav_links=[("Sign in", _abs_url(request, "/auth/login"))],
     )
 
 
@@ -218,7 +216,6 @@ async def set_password_page(request: Request) -> HTMLResponse:
                 panel_title="Error",
                 panel_body_html='<div class="auth-plain-error">Open the full link from your invitation email or CLI output.</div>',
                 branding_links=_branding_links(request),
-                nav_links=[("Sign in", _abs_url(request, "/auth/login"))],
             ),
             status_code=400,
         )

@@ -55,6 +55,42 @@ def _auth_nav_html(links: dict[str, str]) -> str:
     return f'<span class="auth-user">Signed in as {html.escape(user)}</span>{logout_link}'
 
 
+def _header_nav_links(links: dict[str, str]) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    dash = str(links.get("main_dashboard") or "").strip()
+    if dash:
+        out.append(("< Dashboard", dash))
+    job_url = str(links.get("job") or "").strip()
+    if job_url and str(links.get("nav_job_id") or "").strip():
+        out.append(("< job", job_url))
+    return out
+
+
+def _render_header_nav(links: dict[str, str]) -> str:
+    nav_html = "\n".join(f'<a href="{esc(href)}">{esc(label)}</a>' for label, href in _header_nav_links(links) if href)
+    auth_html = _auth_nav_html(links)
+    if auth_html:
+        nav_html = f"{nav_html}\n{auth_html}" if nav_html else auth_html
+    return nav_html
+
+
+def _footer_links_html(
+    links: dict[str, str],
+    *,
+    gen_at: str,
+    extra: tuple[str, str] | None = None,
+) -> str:
+    parts = [f"Generated {esc(gen_at)}"]
+    runtime = str(links.get("admin_runtime") or "").strip()
+    if runtime:
+        parts.append(f'<a href="{esc(runtime)}">Runtime</a>')
+    if extra:
+        href, label = extra
+        if str(href or "").strip() and label:
+            parts.append(f'<a href="{esc(href)}">{esc(label)}</a>')
+    return " · ".join(parts)
+
+
 def _html_report_link_cell(run: dict[str, Any]) -> str:
     view_url = str(run.get("json_view_url") or run.get("report_url") or "").strip()
     if not view_url:
@@ -76,7 +112,24 @@ def render_admin_runtime_html(*, diagnostics: dict[str, Any], links: dict[str, s
         if isinstance(row, dict):
             env_rows_list.append(row_cells(str(row.get("name") or ""), row.get("value")))
     env_rows = "".join(env_rows_list) or empty_row
+    ops_rows_list: list[str] = []
+    for label, key in (
+        ("Health", "health"),
+        ("Slack health", "slack_health"),
+        ("Schedule JSON", "schedule_json"),
+        ("Jobs JSON", "jobs_json"),
+    ):
+        url = str(links.get(key) or "").strip()
+        if url:
+            ops_rows_list.append(
+                f'<tr><td>{esc(label)}</td><td><a href="{esc(url)}">{esc(url)}</a></td></tr>'
+            )
+    ops_rows = "".join(ops_rows_list) or empty_row
     body_extra = f"""
+<section class="panel" aria-label="Operations">
+  <div class="panel-head">Blink operations</div>
+  <table><tbody>{ops_rows}</tbody></table>
+</section>
 <section class="panel" aria-label="Paths">
   <div class="panel-head">Paths</div>
   <table><tbody>{path_rows}</tbody></table>
@@ -94,15 +147,9 @@ def render_admin_runtime_html(*, diagnostics: dict[str, Any], links: dict[str, s
         title="Blink · Runtime",
         heading="Runtime & environment",
         subtitle="Admin diagnostics: paths, scheduler state, and masked environment values.",
-        nav_links=[
-            ("Main dashboard", links.get("main_dashboard", "")),
-            ("Schedule JSON", links.get("schedule_json", "")),
-        ],
         panel_title="",
         table_headers=[],
         table_rows="",
-        footer_link=links.get("main_dashboard", ""),
-        footer_label="Back to dashboard",
         body_extra=body_extra,
         show_table_header=False,
         branding_links=links,
@@ -115,7 +162,6 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
     crawl_n = int(payload.get("scheduled_crawl_count", len(payload.get("crawl_tasks") or [])))
     link_n = int(payload.get("scheduled_link_check_count", len(payload.get("link_check_tasks") or [])))
     scheduler_on = bool(payload.get("scheduler_running"))
-    show_admin_link = bool(payload.get("show_admin_runtime"))
 
     def esc(s: object) -> str:
         return html.escape("" if s is None else str(s))
@@ -315,12 +361,6 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
 
     status_class = "pill pill-on" if scheduler_on else "pill pill-off"
     status_label = "Running" if scheduler_on else "Stopped"
-    admin_footer_link = (
-        f' · <a href="{esc(links.get("admin_runtime", ""))}">Runtime &amp; environment</a>'
-        if show_admin_link and links.get("admin_runtime")
-        else ""
-    )
-
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -367,7 +407,7 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
       display: flex;
       align-items: center;
       gap: 0.75rem;
-      margin-bottom: 0.75rem;
+      margin-bottom: 0.35rem;
     }}
     .brand-logo {{
       width: 36px;
@@ -378,10 +418,17 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
       padding: 4px;
     }}
     .brand-name {{
-      font-size: 0.9rem;
-      font-weight: 600;
+      font-size: 2.25rem;
+      line-height: 36px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }}
+    .brand-tagline {{
+      margin: 0 0 0.75rem;
+      font-size: 1.125rem;
+      font-weight: 500;
+      opacity: 0.92;
       letter-spacing: 0.01em;
-      opacity: 0.95;
     }}
     .job-title-row {{
       display: flex;
@@ -626,14 +673,9 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
   <header class="hero">
     <div class="hero-inner">
       {_brand_header(links)}
-      <h1>Blink schedules</h1>
-      <p>Scheduled crawl and link-check tasks — next run, last run, and status at a glance.</p>
-      <nav class="nav" aria-label="Endpoints">
-        <a href="{esc(links.get("health", ""))}">Health</a>
-        <a href="{esc(links.get("schedule_json", ""))}">Schedule JSON</a>
-        <a href="{esc(links.get("slack_health", ""))}">Slack health</a>
-        <a href="{esc(links.get("results_index", ""))}">Results</a>
-        {_auth_nav_html(links)}
+      <p class="brand-tagline">handle broken links in a blink</p>
+      <nav class="nav" aria-label="Navigation">
+        {_render_header_nav(links)}
       </nav>
     </div>
   </header>
@@ -672,11 +714,11 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
       </div>
     </section>
     <footer class="dashboard-footer">
-      <span class="footer-generated">Generated <span id="dashboardGeneratedAt">{esc(gen_at)}</span></span>
+      <span class="footer-generated">{_footer_links_html(links, gen_at=gen_at)}</span>
       <label class="auto-refresh-toggle">
         <input type="checkbox" id="dashboardAutoRefresh" aria-label="Auto-refresh every 15 seconds"/>
         <span>Auto-refresh (15s)</span>
-      </label>{admin_footer_link}
+      </label>
     </footer>
 <script>
 (function () {{
@@ -780,17 +822,10 @@ def render_results_jobs_html(payload: dict[str, Any], *, links: dict[str, str]) 
         title="Blink results · Jobs",
         heading="Blink results",
         subtitle="Job-centric view: open crawl history, then drill into related link-check runs.",
-        nav_links=[
-            ("Main dashboard", links.get("main_dashboard", "")),
-            ("Schedule", links.get("schedule", "")),
-            ("Jobs JSON", links.get("jobs_json", "")),
-            ("Health", links.get("health", "")),
-        ],
         panel_title="Job overview",
         table_headers=["Jobs"],
         table_rows=rows if rows else empty_row,
-        footer_link=links.get("refresh", ""),
-        footer_label="Refresh",
+        footer_extra=(links.get("refresh", ""), "Refresh"),
         branding_links=links,
     )
 
@@ -934,6 +969,7 @@ def render_results_job_html(
     merged_u = str(links.get("merged_runs_url") or "").strip()
     crawl_u = str(links.get("crawl_runs_url") or "").strip()
     lc_u = str(links.get("link_check_runs_url") or "").strip()
+    runs_json_u = str(links.get("runs_json") or "").strip()
     mode = str(links.get("run_mode") or "")
     tabs_row = ""
     if merged_u and crawl_u and lc_u:
@@ -947,6 +983,7 @@ def render_results_job_html(
             f'<a href="{esc(merged_u)}">{_tab_label(mode == "all", "Combined")}</a> · '
             f'<a href="{esc(crawl_u)}">{_tab_label(mode == "crawl", "Crawls")}</a> · '
             f'<a href="{esc(lc_u)}">{_tab_label(mode == "link_check", "Link checks")}</a>'
+            f'{" · " + _html_action_link(runs_json_u, "runs JSON") if runs_json_u else ""}'
             "</div></section>"
         )
     toggle_row = ""
@@ -967,17 +1004,10 @@ def render_results_job_html(
         title=f"Blink results · {esc(job.get('job_id', 'job'))} · {esc(task_type)}",
         heading=f"Job results · {esc(job.get('job_id', ''))} · {esc(task_type)}",
         subtitle=f"{esc(job.get('name', ''))} ({esc('enabled' if job.get('enabled') else 'disabled')})",
-        nav_links=[
-            ("Main dashboard", links.get("main_dashboard", "")),
-            ("Back to jobs", links.get("jobs_index", "")),
-            ("Runs JSON", links.get("runs_json", "")),
-            ("Schedule", links.get("schedule", "")),
-        ],
         panel_title="Run history",
         table_headers=table_headers,
         table_rows=rows if rows else empty_row,
-        footer_link=links.get("refresh", ""),
-        footer_label="Refresh",
+        footer_extra=(links.get("refresh", ""), "Refresh"),
         body_extra=tabs_row + toggle_row,
         branding_links=links,
     )
@@ -1018,24 +1048,19 @@ def render_results_structure_html(
         "</label>"
     )
     return _render_results_shell(
-        title=f"Blink structure · {esc(job.get('job_id', ''))} run {esc(run.get('run_id', ''))}",
-        heading=f"Structure · {esc(job.get('job_id', ''))}",
+        title=f"Blink website structure · {esc(job.get('job_id', ''))} run {esc(run.get('run_id', ''))}",
+        heading=f"Website structure · {esc(job.get('job_id', ''))}",
         subtitle=f"{esc(job.get('name', ''))} · run {esc(run.get('run_id', ''))}",
-        nav_links=[
-            ("Main dashboard", links.get("main_dashboard", "")),
-            ("Back to run", links.get("run", "")),
-            ("Structure JSON", links.get("structure_json", "")),
-            ("Jobs", links.get("jobs_index", "")),
-        ],
         panel_title="URL path radial tree",
         table_headers=["Field", "Value"],
         table_rows=(
             f"<tr><td>Metric</td><td class=\"mono\">{esc(tree_payload.get('metric') or 'external_count')}</td></tr>"
             f"<tr><td>Node count</td><td class=\"mono\">{esc(tree_payload.get('node_count') or 0)}</td></tr>"
             f"<tr><td>Leaf pages</td><td class=\"mono\">{esc(tree_payload.get('leaf_count') or 0)}</td></tr>"
+            f"<tr><td>JSON</td><td>{_html_action_link(links.get('structure_json'), 'download')}</td></tr>"
+            f"<tr><td>Run</td><td>{_html_action_link(links.get('run'), 'open run detail')}</td></tr>"
         ),
-        footer_link=links.get("refresh", ""),
-        footer_label="Refresh",
+        footer_extra=(links.get("refresh", ""), "Refresh"),
         body_extra=f"""
 <section class="panel" aria-label="Radial tree chart" style="margin-top: 1rem;">
   <div class="panel-head">Radial tidy tree</div>
@@ -1417,7 +1442,6 @@ def render_file_viewer_html(
     title: str,
     heading: str,
     subtitle: str,
-    nav_links: list[tuple[str, str]],
     panel_title: str,
     body_html: str,
     download_url: str,
@@ -1440,12 +1464,10 @@ def render_file_viewer_html(
         title=title,
         heading=heading,
         subtitle=subtitle,
-        nav_links=nav_links,
         panel_title="",
         table_headers=[],
         table_rows="",
-        footer_link=links.get("back", links.get("refresh", "")),
-        footer_label="Back to history",
+        footer_extra=(links.get("back", links.get("refresh", "")), "Back to history"),
         body_extra=body_extra,
         show_table_header=False,
         branding_links=links,
@@ -1470,15 +1492,10 @@ def render_job_task_history_html(
         title=f"Blink history · {esc(job.get('job_id', ''))}",
         heading=f"Task history · {esc(job.get('job_id', ''))}",
         subtitle=f"{esc(job.get('name', ''))} ({esc('enabled' if job.get('enabled') else 'disabled')})",
-        nav_links=[
-            ("Main dashboard", links.get("main_dashboard", "")),
-            ("Back to jobs", links.get("jobs_index", "")),
-        ],
         panel_title="Crawl runs with related link-check runs",
         table_headers=["Run", "Started", "Finished", "Visited/Checked", "Failed", "Report", "Logs", "JSON"],
         table_rows="".join(rows) if rows else '<tr><td colspan="8" class="empty">No run history available.</td></tr>',
-        footer_link=links.get("refresh", ""),
-        footer_label="Refresh",
+        footer_extra=(links.get("refresh", ""), "Refresh"),
         branding_links=links,
     )
 
@@ -1655,17 +1672,12 @@ def render_results_run_html(
   </div>
 </section>
 """
+    structure_cell = _html_action_link(links.get("structure"), "website structure")
+    run_json_cell = _html_action_link(links.get("run_json"), "json")
     return _render_results_shell(
         title=f"Blink results · {esc(job.get('job_id', ''))} run {esc(run.get('run_id', ''))}",
         heading=f"Run detail · {esc(job.get('job_id', ''))}",
         subtitle=f"{esc(job.get('name', ''))} ({esc('enabled' if job.get('enabled') else 'disabled')})",
-        nav_links=[
-            ("Main dashboard", links.get("main_dashboard", "")),
-            ("Back to job", links.get("job", "")),
-            ("Run JSON", links.get("run_json", "")),
-            ("Structure", links.get("structure", "")),
-            ("Jobs", links.get("jobs_index", "")),
-        ],
         panel_title="Overview",
         table_headers=["Field", "Value"],
         table_rows=(
@@ -1674,9 +1686,10 @@ def render_results_run_html(
             f"<tr><td>run start</td><td class=\"mono\">{esc(run.get('started_at') or '—')}</td></tr>"
             f"<tr><td>run end</td><td class=\"mono\">{esc(run.get('finished_at') or '—')}</td></tr>"
             f"<tr><td>run logs</td><td>{_html_log_links_cell(run)}</td></tr>"
+            f"<tr><td>website structure</td><td>{structure_cell}</td></tr>"
+            f"<tr><td>run data</td><td>{run_json_cell}</td></tr>"
         ),
-        footer_link=links.get("refresh", ""),
-        footer_label="Refresh",
+        footer_extra=(links.get("refresh", ""), "Refresh"),
         body_extra=body_extra,
         show_table_header=False,
         branding_links=links,
@@ -1688,23 +1701,19 @@ def _render_results_shell(
     title: str,
     heading: str,
     subtitle: str,
-    nav_links: list[tuple[str, str]],
     panel_title: str,
     table_headers: list[str],
     table_rows: str,
-    footer_link: str,
-    footer_label: str,
+    footer_extra: tuple[str, str] | None = None,
     body_extra: str = "",
     show_table_header: bool = True,
     branding_links: dict[str, str] | None = None,
 ) -> str:
     branding_links = branding_links or {}
-    nav_html = "\n".join(f'<a href="{esc(href)}">{esc(label)}</a>' for label, href in nav_links if href)
-    auth_html = _auth_nav_html(branding_links)
-    if auth_html:
-        nav_html = f"{nav_html}\n{auth_html}" if nav_html else auth_html
+    nav_html = _render_header_nav(branding_links)
     headers_html = "".join(f"<th>{esc(h)}</th>" for h in table_headers)
     gen_at = datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
+    footer_html = _footer_links_html(branding_links, gen_at=gen_at, extra=footer_extra)
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1720,7 +1729,7 @@ def _render_results_shell(
       {_brand_header(branding_links)}
       <h1>{esc(heading)}</h1>
       <p>{esc(subtitle)}</p>
-      <nav class="nav" aria-label="Endpoints">
+      <nav class="nav" aria-label="Navigation">
         {nav_html}
       </nav>
     </div>
@@ -1734,7 +1743,7 @@ def _render_results_shell(
       </table>
     </section>
     {body_extra}
-    <footer>Generated {esc(gen_at)} · <a href="{esc(footer_link)}">{esc(footer_label)}</a></footer>
+    <footer>{footer_html}</footer>
   </div>
 </body>
 </html>
@@ -1763,9 +1772,10 @@ def _shared_styles() -> str:
   body { margin: 0; font-family: var(--font); background: var(--surface); color: var(--text); line-height: 1.5; min-height: 100vh; }
   .hero { background: linear-gradient(135deg, var(--cardano-blue) 0%, var(--cardano-blue-light) 100%); color: #fff; padding: 2rem 1.5rem 2.25rem; box-shadow: var(--shadow); }
   .hero-inner { max-width: 1200px; margin: 0 auto; }
-  .brand { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; }
+  .brand { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.35rem; }
   .brand-logo { width: 36px; height: 36px; object-fit: contain; border-radius: 8px; background: rgba(255, 255, 255, 0.14); padding: 4px; }
-  .brand-name { font-size: 0.9rem; font-weight: 600; letter-spacing: 0.01em; opacity: 0.95; }
+  .brand-name { font-size: 2.25rem; line-height: 36px; font-weight: 700; letter-spacing: -0.02em; }
+  .brand-tagline { margin: 0 0 0.75rem; font-size: 1.125rem; font-weight: 500; opacity: 0.92; letter-spacing: 0.01em; }
   .job-title { font-weight: 700; margin-bottom: 0.25rem; }
   .job-line { margin-top: 0.2rem; }
   .hero h1 { margin: 0 0 0.35rem; font-size: 1.65rem; font-weight: 700; letter-spacing: -0.02em; }
@@ -1898,12 +1908,11 @@ def render_auth_page(
     panel_title: str,
     panel_body_html: str,
     branding_links: dict[str, str],
-    nav_links: list[tuple[str, str]] | None = None,
 ) -> str:
     """Dashboard-styled shell for login / set-password pages."""
-    nav_links = nav_links or []
-    nav_html = "\n".join(f'<a href="{esc(href)}">{esc(label)}</a>' for label, href in nav_links if href)
+    nav_html = _render_header_nav(branding_links)
     gen_at = datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
+    footer_html = _footer_links_html(branding_links, gen_at=gen_at)
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1928,7 +1937,7 @@ def render_auth_page(
       <div class="panel-head">{esc(panel_title)}</div>
       {panel_body_html}
     </section>
-    <footer>Generated {esc(gen_at)}</footer>
+    <footer>{footer_html}</footer>
   </div>
 </body>
 </html>

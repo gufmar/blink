@@ -74,7 +74,15 @@ def _disk_job_ids(jobs_root: Path) -> frozenset[str]:
 
 
 def _page_links(request: Request, **extra: str) -> dict[str, str]:
-    return {**_branding_links(request), **_auth_nav_links(request), **extra}
+    links: dict[str, str] = {**_branding_links(request), **_auth_nav_links(request), **extra}
+    links["main_dashboard"] = _path_for(request, "dashboard_schedule")
+    if _can_view_admin_runtime(request):
+        links["admin_runtime"] = _path_for(request, "dashboard_admin_runtime")
+        links["health"] = _path_for(request, "health")
+        links["schedule_json"] = _path_for(request, "api_schedule")
+        links["slack_health"] = _path_for(request, "slack_health")
+        links["jobs_json"] = _path_for(request, "api_results_jobs")
+    return links
 
 
 def _can_view_admin_runtime(request: Request) -> bool:
@@ -725,17 +733,11 @@ async def schedule_dashboard(request: Request) -> HTMLResponse:
     payload["job_count"] = len(jobs)
     payload["scheduled_crawl_count"] = sum(1 for row in job_rows if row.get("crawl"))
     payload["scheduled_link_check_count"] = sum(1 for row in job_rows if row.get("link_check"))
-    payload["show_admin_runtime"] = _can_view_admin_runtime(request)
     page_links = {
-        "health": _path_for(request, "health"),
-        "schedule_json": _path_for(request, "api_schedule"),
-        "slack_health": _path_for(request, "slack_health"),
         "results_index": _path_for(request, "dashboard_results_jobs"),
         "schedule_refresh": _path_for(request, "dashboard_schedule"),
         **_page_links(request),
     }
-    if payload["show_admin_runtime"]:
-        page_links["admin_runtime"] = _path_for(request, "dashboard_admin_runtime")
     page = render_schedule_dashboard_html(payload, links=page_links)
     return HTMLResponse(page)
 
@@ -756,11 +758,7 @@ async def dashboard_admin_runtime(request: Request) -> HTMLResponse:
     )
     page = render_admin_runtime_html(
         diagnostics=diagnostics,
-        links={
-            "main_dashboard": _path_for(request, "dashboard_schedule"),
-            "schedule_json": _path_for(request, "api_schedule"),
-            **_page_links(request),
-        },
+        links=_page_links(request),
     )
     return HTMLResponse(page)
 
@@ -809,8 +807,8 @@ async def dashboard_results_job_history(request: Request) -> HTMLResponse:
         job=job,
         crawl_runs=crawl_runs,
         links={
-            "main_dashboard": _path_for(request, "dashboard_schedule"),
-            "jobs_index": _path_for(request, "dashboard_results_jobs"),
+            "nav_job_id": job_id,
+            "job": _path_for(request, "dashboard_results_job_history", job_id=job_id),
             "refresh": _path_for(request, "dashboard_results_job_history", job_id=job_id),
             **_page_links(request),
         },
@@ -1230,10 +1228,6 @@ async def dashboard_results_jobs(request: Request) -> HTMLResponse:
     page = render_results_jobs_html(
         {"jobs_summary": rows},
         links={
-            "main_dashboard": _path_for(request, "dashboard_schedule"),
-            "schedule": _path_for(request, "dashboard_schedule"),
-            "jobs_json": _path_for(request, "api_results_jobs"),
-            "health": _path_for(request, "health"),
             "refresh": _path_for(request, "dashboard_results_jobs"),
             **_page_links(request),
         },
@@ -1311,10 +1305,9 @@ async def _dashboard_job_runs_page(request: Request, *, mode: Literal["all", "cr
         task_type=render_task,
         run_rows=run_rows,
         links={
-            "main_dashboard": _path_for(request, "dashboard_schedule"),
-            "jobs_index": _path_for(request, "dashboard_results_job_history", job_id=job_id),
+            "nav_job_id": job_id,
+            "job": _path_for(request, "dashboard_results_job_history", job_id=job_id),
             "runs_json": runs_json_url,
-            "schedule": _path_for(request, "dashboard_schedule"),
             "refresh": refresh_url,
             "merged_runs_url": _path_for(request, "dashboard_results_job", job_id=job_id),
             "crawl_runs_url": _path_for(request, "dashboard_results_job_crawls", job_id=job_id),
@@ -1376,9 +1369,8 @@ def _resolved_job_report_path(jobs_root: Path, job_id: str, report_file: str) ->
 
 def _viewer_nav_links(request: Request, *, job_id: str) -> dict[str, str]:
     return {
-        "main_dashboard": _path_for(request, "dashboard_schedule"),
-        "jobs_index": _path_for(request, "dashboard_results_jobs"),
-        "history": _path_for(request, "dashboard_results_job_history", job_id=job_id),
+        "nav_job_id": job_id,
+        "job": _path_for(request, "dashboard_results_job_history", job_id=job_id),
         "back": _path_for(request, "dashboard_results_job_history", job_id=job_id),
         "refresh": str(request.url),
         **_page_links(request),
@@ -1413,16 +1405,10 @@ def _render_log_viewer_html(
             for url, day in download_urls
         )
         body = f'<div class="viewer-downloads">{day_links}</div>' + body
-    nav = [
-        ("Main dashboard", _path_for(request, "dashboard_schedule")),
-        ("Jobs", _path_for(request, "dashboard_results_jobs")),
-        ("Task history", _path_for(request, "dashboard_results_job_history", job_id=job_id)),
-    ]
     return render_file_viewer_html(
         title=f"Blink logs · {job_id}",
         heading=f"Run logs · {job_id}",
         subtitle="Log output for the selected run (UTC daily files).",
-        nav_links=nav,
         panel_title="Log output",
         body_html=body,
         download_url=download_url,
@@ -1530,16 +1516,10 @@ async def dashboard_results_job_report(request: Request) -> Response:
         f'<pre class="viewer-pre">{_html_esc(payload_text)}</pre>'
         "</div>"
     )
-    nav = [
-        ("Main dashboard", _path_for(request, "dashboard_schedule")),
-        ("Jobs", _path_for(request, "dashboard_results_jobs")),
-        ("Task history", _path_for(request, "dashboard_results_job_history", job_id=job_id)),
-    ]
     page = render_file_viewer_html(
         title=f"Blink report · {job_id}",
         heading=f"JSON report · {job_id}",
         subtitle=report_file,
-        nav_links=nav,
         panel_title="Link-check JSON report",
         body_html=body,
         download_url=f"{view_url}?download=1",
@@ -1768,7 +1748,7 @@ async def dashboard_results_run(request: Request) -> HTMLResponse:
             for row in ignored_links
         ],
         links={
-            "main_dashboard": _path_for(request, "dashboard_schedule"),
+            "nav_job_id": job_id,
             "job": _path_for(request, "dashboard_results_job_history", job_id=job_id),
             "run_json": with_filters(
                 f"{_path_for(request, 'api_results_run_detail', job_id=job_id, run_id=run_id)}?task_type={task_type}",
@@ -1897,7 +1877,8 @@ async def dashboard_results_structure(request: Request) -> HTMLResponse:
         },
         tree_payload=structure_payload,
         links={
-            "main_dashboard": _path_for(request, "dashboard_schedule"),
+            "nav_job_id": job_id,
+            "job": _path_for(request, "dashboard_results_job_history", job_id=job_id),
             "run": run_page_url,
             "structure_json": (
                 f"{_path_for(request, 'api_results_run_structure', job_id=job_id, run_id=run_id)}?task_type={task_type}"

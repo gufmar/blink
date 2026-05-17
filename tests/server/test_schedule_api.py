@@ -42,8 +42,12 @@ def test_dashboard_ok(tmp_path: Path) -> None:
     client = TestClient(app)
     r = client.get("/dashboard")
     assert r.status_code == 200
-    assert "Blink schedules" in r.text
-    assert "/api/schedule" in r.text
+    assert "handle broken links in a blink" in r.text
+    assert "< Dashboard" in r.text
+    runtime = client.get("/dashboard/admin/runtime")
+    assert runtime.status_code == 200
+    assert "/api/schedule" in runtime.text
+    assert "/notifications/slack/health" in runtime.text
     assert "/dashboard/results" in r.text
     assert "panel-scroll" in r.text
     assert "line-dot" in r.text

@@ -43,4 +43,8 @@ def test_admin_runtime_page_available_without_auth(tmp_path: Path) -> None:
     page = client.get("/dashboard/admin/runtime")
     assert page.status_code == 200
     assert "Runtime &amp; environment" in page.text
+    assert "Blink operations" in page.text
+    assert "Slack health" in page.text
+    assert "Schedule JSON" in page.text
+    assert "< Dashboard" in page.text
     assert str(tmp_path.resolve()) in page.text
