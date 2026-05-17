@@ -31,6 +31,12 @@ def _iso_utc_z() -> str:
     return datetime.now(tz=UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _datetime_to_iso_utc(when: datetime) -> str:
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    return when.isoformat().replace("+00:00", "Z")
+
+
 def _job_next_run_time(job: Any, *, now: datetime | None = None) -> datetime | None:
     """Next run for an APScheduler job (works before the scheduler thread is started)."""
     if job is None:
@@ -147,20 +153,17 @@ class BlinkSchedulerService:
     def _job_ap_id(self, job_id: str, task_type: TaskType) -> str:
         return f"{APSCHEDULER_JOB_PREFIX}:{job_id}:{task_type}"
 
-    def _add_task_job(
+    def _not_before_for_task(
         self,
         entry: ScheduleRegistryEntry,
         task_type: TaskType,
         task: ScheduleTaskConfig,
-    ) -> None:
+    ) -> datetime:
         cfg = entry.config
-        sch = cfg["schedule"]
         delay = max(0, int(task["startup_delay_seconds"]))
         phase = _task_phase_offset_seconds(task)
         now = datetime.now(tz=UTC)
         not_before = now + timedelta(seconds=delay + phase)
-        # Preserve interval cadence over service restarts by aligning the next run
-        # to the last known completion time when available.
         if task["mode"] == "interval":
             st = self._store.get(cfg["meta"]["job_id"], task_type)
             last_end = _parse_iso_utc(st.last_end_at if st else None)
@@ -169,6 +172,75 @@ class BlinkSchedulerService:
                 resumed_not_before = last_end + timedelta(seconds=cadence_seconds)
                 if resumed_not_before > not_before:
                     not_before = resumed_not_before
+        return not_before
+
+    def _predict_next_run_at(
+        self,
+        entry: ScheduleRegistryEntry,
+        task_type: TaskType,
+        task: ScheduleTaskConfig,
+    ) -> datetime | None:
+        sch = entry.config["schedule"]
+        try:
+            not_before = self._not_before_for_task(entry, task_type, task)
+            trigger = build_trigger(task, timezone_name=sch["timezone"], not_before=not_before)
+        except (TypeError, ValueError):
+            return None
+        return trigger.get_next_fire_time(None, datetime.now(tz=UTC))
+
+    def _resolve_next_run_iso(
+        self,
+        entry: ScheduleRegistryEntry,
+        task_type: TaskType,
+        task: ScheduleTaskConfig,
+    ) -> str | None:
+        ap_id = self._job_ap_id(entry.job_id, task_type)
+        next_run = _job_next_run_time(self._scheduler.get_job(ap_id))
+        if next_run is None:
+            next_run = self._predict_next_run_at(entry, task_type, task)
+        if next_run is None:
+            return None
+        return _datetime_to_iso_utc(next_run)
+
+    def _sync_scheduler_with_registry(self) -> list[ScheduleRegistryEntry]:
+        """Align APScheduler jobs with current job files (handles config edits without restart)."""
+        entries = load_registry(self.jobs_root)
+        expected_ap_ids: set[str] = set()
+        for entry in entries:
+            sch = entry.config["schedule"]
+            for task_type in ("crawl", "link_check"):
+                tcfg = sch[task_type]  # type: ignore[literal-required]
+                ap_id = self._job_ap_id(entry.job_id, task_type)  # type: ignore[arg-type]
+                if not tcfg["enabled"]:
+                    if self._scheduler.get_job(ap_id) is not None:
+                        self._scheduler.remove_job(ap_id)
+                    continue
+                expected_ap_ids.add(ap_id)
+                if self._scheduler.get_job(ap_id) is None:
+                    logger.info(
+                        "Registering scheduled task {} {} (missing from APScheduler)",
+                        entry.job_id,
+                        task_type,
+                    )
+                    self._add_task_job(entry, task_type, tcfg)  # type: ignore[arg-type]
+        prefix = f"{APSCHEDULER_JOB_PREFIX}:"
+        for job in list(self._scheduler.get_jobs()):
+            jid = str(getattr(job, "id", "") or "")
+            if jid.startswith(prefix) and jid not in expected_ap_ids:
+                logger.info("Removing stale scheduled task {}", jid)
+                self._scheduler.remove_job(jid)
+        return entries
+
+    def _add_task_job(
+        self,
+        entry: ScheduleRegistryEntry,
+        task_type: TaskType,
+        task: ScheduleTaskConfig,
+    ) -> None:
+        cfg = entry.config
+        sch = cfg["schedule"]
+        not_before = self._not_before_for_task(entry, task_type, task)
+        delay = max(0, int(task["startup_delay_seconds"]))
         try:
             trigger = build_trigger(task, timezone_name=sch["timezone"], not_before=not_before)
         except (TypeError, ValueError) as exc:
@@ -284,7 +356,7 @@ class BlinkSchedulerService:
 
     def build_schedule_payload(self) -> dict[str, Any]:
         """JSON-serializable status for HTTP API and CLI."""
-        entries = load_registry(self.jobs_root)
+        entries = self._sync_scheduler_with_registry()
         tasks: list[dict[str, Any]] = []
         crawl_tasks: list[dict[str, Any]] = []
         link_tasks: list[dict[str, Any]] = []
@@ -298,14 +370,7 @@ class BlinkSchedulerService:
                     continue
                 tt: TaskType = task_type  # type: ignore[assignment]
                 ap_id = self._job_ap_id(cfg["meta"]["job_id"], tt)
-                job = self._scheduler.get_job(ap_id)
-                next_run = _job_next_run_time(job)
-                next_iso = None
-                if next_run is not None:
-                    if next_run.tzinfo is None:
-                        next_iso = next_run.replace(tzinfo=UTC).isoformat().replace("+00:00", "Z")
-                    else:
-                        next_iso = next_run.isoformat()
+                next_iso = self._resolve_next_run_iso(entry, tt, tcfg)
 
                 st = self._store.get(cfg["meta"]["job_id"], task_type)
                 err = st.last_error if st else None

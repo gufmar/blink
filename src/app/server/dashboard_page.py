@@ -1562,7 +1562,7 @@ def render_results_run_html(
     <td class="source-col">{_render_target_and_sources(item)}</td>
     <td class="mono">{esc(item.get("status_code") if item.get("status_code") is not None else "—")}</td>
     <td>{esc(item.get("error_category") or "—")}</td>
-    <td>{esc(item.get("error_message") or "—")}</td>
+    <td class="wrap-col">{esc(item.get("error_message") or "—")}</td>
     <td class="mono">{esc(item.get("checked_at") or "—")}</td>
   </tr>"""
         for item in failed_links
@@ -1588,8 +1588,8 @@ def render_results_run_html(
     <td class="source-col">{_render_target_and_sources(item)}</td>
     <td class="mono">{esc(item.get("status_code") if item.get("status_code") is not None else "—")}</td>
     <td>{esc(item.get("error_category") or "—")}</td>
-    <td>{esc(item.get("decision_reason") or "—")}</td>
-    <td>{esc(item.get("error_message") or "—")}</td>
+    <td class="wrap-col">{esc(item.get("decision_reason") or "—")}</td>
+    <td class="wrap-col">{esc(item.get("error_message") or "—")}</td>
     <td class="mono">{esc(item.get("checked_at") or "—")}</td>
   </tr>"""
         for item in ignored_links
@@ -1601,10 +1601,12 @@ def render_results_run_html(
 {run_stats}
 <section class="panel" aria-label="Failed by category">
   <div class="panel-head">Failed external links by error category</div>
-  <table>
+  <div class="panel-scroll">
+  <table class="data-table">
     <thead><tr><th>Error category</th>{''.join(f'<th>{esc(label)}</th>' for label in column_labels)}</tr></thead>
     <tbody>{category_rows}</tbody>
   </table>
+  </div>
 </section>
 <section class="panel" aria-label="Global filters">
   <div class="panel-head">Global filters</div>
@@ -1623,28 +1625,34 @@ def render_results_run_html(
 </section>
 <section class="panel" aria-label="Failed links" style="margin-top: 1rem;">
   <div class="panel-head">Failed link-check results (latest per target)</div>
-  <table class="sticky-head">
+  <div class="panel-scroll">
+  <table class="data-table sticky-head">
     <thead>
       <tr><th>Target URL</th><th>Status</th><th>Category</th><th>Error</th><th>Checked at</th></tr>
     </thead>
     <tbody>{failed_link_rows}</tbody>
   </table>
+  </div>
 </section>
 <section class="panel" aria-label="Failed crawl pages" style="margin-top: 1rem;">
   <div class="panel-head">Failed crawl pages</div>
-  <table>
+  <div class="panel-scroll">
+  <table class="data-table">
     <thead>
       <tr><th>URL</th><th>Depth</th><th>Status</th><th>Error</th><th>Created</th></tr>
     </thead>
     <tbody>{failed_page_rows}</tbody>
   </table>
+  </div>
 </section>
 <section class="panel" aria-label="Ignored external links" style="margin-top: 1rem;">
   <div class="panel-head">Ignored link-check results (latest per target)</div>
-  <table>
+  <div class="panel-scroll">
+  <table class="data-table">
     <thead><tr><th>Target URL</th><th>Status</th><th>Category</th><th>Reason</th><th>Error</th><th>Checked at</th></tr></thead>
     <tbody>{ignored_link_rows}</tbody>
   </table>
+  </div>
 </section>
 """
     return _render_results_shell(
@@ -1780,7 +1788,32 @@ def _shared_styles() -> str:
   tr:nth-child(even) td { background: #fafbfd; }
   tr:last-child td { border-bottom: none; }
   td.empty { text-align: center; color: var(--muted); padding: 2rem; }
-  .source-col { min-width: 28rem; }
+  .panel-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    max-width: 100%;
+  }
+  .panel-scroll .data-table {
+    width: max-content;
+    min-width: 100%;
+  }
+  .panel-scroll .data-table th,
+  .panel-scroll .data-table td {
+    white-space: nowrap;
+  }
+  .panel-scroll .data-table .source-col {
+    white-space: normal;
+    min-width: 14rem;
+    max-width: 24rem;
+  }
+  .panel-scroll .data-table .wrap-col {
+    white-space: normal;
+    min-width: 10rem;
+    max-width: 22rem;
+    word-break: break-word;
+  }
+  .source-col { min-width: 14rem; }
   .filters-row { padding: 0.75rem 1rem; border-bottom: 1px solid var(--border); background: #fff; }
   .filters-form { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
   .filters-form label { font-size: 0.8rem; color: var(--muted); }

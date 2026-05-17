@@ -111,6 +111,28 @@ def test_dashboard_links_honor_proxy_root_path(tmp_path: Path) -> None:
     assert "/blink/api/schedule" in r.text
 
 
+def test_dashboard_shows_next_link_check_after_schedule_enabled(tmp_path: Path) -> None:
+    _minimal_job(tmp_path)
+    job_path = tmp_path / "zzz.job.json"
+    data = json.loads(job_path.read_text(encoding="utf-8"))
+    data["schedule"]["link_check"]["enabled"] = False
+    job_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    app = build_app(jobs_root=tmp_path)
+    client = TestClient(app)
+    before = client.get("/dashboard")
+    assert before.status_code == 200
+    assert "next check" in before.text
+    assert "4h cadence" not in before.text and "6h cadence" not in before.text or "not scheduled" in before.text
+
+    data["schedule"]["link_check"]["enabled"] = True
+    job_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    after = client.get("/dashboard")
+    assert after.status_code == 200
+    assert "next check" in after.text
+    assert "6h cadence" in after.text
+
+
 def test_dashboard_links_honor_configured_base_path(tmp_path: Path) -> None:
     _minimal_job(tmp_path)
     app = build_app(jobs_root=tmp_path, route_base_path="/blink")
