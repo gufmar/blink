@@ -215,7 +215,7 @@
       "mode": "interval",
       "expression": "24h",
       "jitter_seconds": 45,
-      "max_runtime_seconds": 7200,
+      "max_runtime_seconds": 43200,
       "startup_delay_seconds": 15,
       "phase_offset_seconds": 0
     },
@@ -224,7 +224,7 @@
       "mode": "interval",
       "expression": "6h",
       "jitter_seconds": 30,
-      "max_runtime_seconds": 3600,
+      "max_runtime_seconds": 43200,
       "startup_delay_seconds": 30,
       "phase_offset_seconds": 0
     },
