@@ -1514,6 +1514,17 @@ def _fmt_external_failed_percent(failed: object, external_total: object) -> str:
         return "0%"
     return f"{int(round((failed_n / external) * 100.0))}%"
 
+
+def _fmt_pages_external_percent(pages: object, external_links: object) -> str:
+    try:
+        pages_n = int(pages) if pages is not None else 0
+        external_n = int(external_links) if external_links is not None else 0
+    except (TypeError, ValueError):
+        return "—"
+    if external_n <= 0:
+        return "—"
+    return f"{int(round((pages_n / external_n) * 100.0))}%"
+
 def _category_count_cell(count: int, prev_count: int | None) -> str:
     if prev_count is None:
         return esc(str(count))
@@ -1629,9 +1640,8 @@ def render_crawl_run_report_html(
   <div class="metric"><div class="value">{esc(run.get("pages_visited"))}</div><div class="label">Pages crawled</div></div>
   <div class="metric"><div class="value">{esc(run.get("pages_failed"))}</div><div class="label">Pages failed</div></div>
   <div class="metric"><div class="value">{esc(run.get("links_discovered"))}</div><div class="label">Links discovered</div></div>
-  <div class="metric"><div class="value">{esc(run.get("external_links"))}</div><div class="label">External links (this run)</div></div>
-  <div class="metric"><div class="value">{esc(totals.get("pages_total"))}</div><div class="label">Pages covered (job)</div></div>
-  <div class="metric"><div class="value">{esc(totals.get("external_links_total"))}</div><div class="label">External URLs (job)</div></div>
+  <div class="metric"><div class="value">{esc(run.get("external_links"))}</div><div class="label">External links</div></div>
+  <div class="metric"><div class="value">{esc(_fmt_pages_external_percent(run.get("pages_visited"), run.get("external_links")))}</div><div class="label">Pages vs external</div></div>
 </section>
 """
     body_extra = f"""
