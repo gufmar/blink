@@ -51,7 +51,8 @@ from app.server.dashboard_page import (
     render_job_task_history_html,
     render_results_job_html,
     render_results_jobs_html,
-    render_results_run_html,
+    render_crawl_run_report_html,
+    render_link_check_run_report_html,
     render_results_structure_html,
     render_schedule_dashboard_html,
 )
@@ -308,6 +309,84 @@ def _serialize_run_history(job_id: str, repo: CrawlRepository | None, *, limit: 
         }
         for rec in runs
     ]
+
+
+def _format_run_duration_label(started_at: str | None, finished_at: str | None) -> str:
+    start = _parse_iso_datetime_utc(started_at)
+    end = _parse_iso_datetime_utc(finished_at)
+    if start is None:
+        return "—"
+    if end is None:
+        return "ongoing"
+    seconds = int((end - start).total_seconds())
+    if seconds < 0:
+        return "—"
+    hours, rem = divmod(seconds, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours}h {minutes}m"
+    if minutes:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
+
+
+def _crawl_ignore_patterns_from_job(job: dict[str, Any]) -> dict[str, list[str]]:
+    job_file = str(job.get("job_file") or "").strip()
+    if not job_file:
+        return {}
+    config, _ = _load_and_validate_job_config(Path(job_file))
+    if config is None:
+        return {}
+    ignore = config.get("crawl", {}).get("ignore", {})
+    if not isinstance(ignore, dict):
+        return {}
+    out: dict[str, list[str]] = {}
+    for key, value in ignore.items():
+        if isinstance(value, list) and value:
+            out[str(key)] = [str(v) for v in value]
+    return out
+
+
+def _build_crawl_history_comparison(
+    repo: CrawlRepository,
+    job_id: str,
+    anchor_run_id: int,
+    *,
+    limit_previous: int = 3,
+) -> list[dict[str, Any]]:
+    history = repo.list_run_history(job_id, limit=50)
+    by_id = {rec.run_id: rec for rec in history}
+    idx = next((i for i, rec in enumerate(history) if rec.run_id == anchor_run_id), None)
+    run_ids = [anchor_run_id]
+    if idx is not None:
+        for i in range(idx + 1, min(idx + 1 + limit_previous, len(history))):
+            run_ids.append(history[i].run_id)
+    rows: list[dict[str, Any]] = []
+    for rid in run_ids:
+        rec = by_id.get(rid)
+        if rec is None:
+            continue
+        ignored_links: int | None = None
+        lc_id = repo.get_latest_link_check_run_id_for_crawl(rid)
+        if lc_id is not None:
+            lc_run = repo.get_link_check_run(lc_id)
+            if lc_run is not None:
+                ignored_links = lc_run.ignored_total
+        rows.append(
+            {
+                "run_id": rec.run_id,
+                "started_at": rec.started_at,
+                "finished_at": rec.finished_at,
+                "duration": _format_run_duration_label(rec.started_at, rec.finished_at),
+                "pages_visited": rec.pages_visited,
+                "pages_failed": rec.pages_failed,
+                "links_discovered": rec.links_discovered,
+                "external_links": repo.count_external_links_for_run(rid),
+                "ignored_links": ignored_links,
+                "is_current": rid == anchor_run_id,
+            }
+        )
+    return rows
 
 
 def _serialize_link_check_history(job_id: str, repo: CrawlRepository | None, *, limit: int) -> list[dict[str, Any]]:
@@ -1645,6 +1724,20 @@ async def dashboard_results_run(request: Request) -> HTMLResponse:
         per_run_counts: dict[int, dict[str, int]] = {}
         for col_idx, crawl_rid in enumerate(comparison_run_ids):
             per_run_counts[crawl_rid] = _failed_category_counts_for_crawl_column(crawl_rid, column_index=col_idx)
+        crawl_history_rows = _build_crawl_history_comparison(repo, job_id, selected_crawl_run_id)
+        crawl_ignore_patterns = _crawl_ignore_patterns_from_job(job)
+        run_external_links = repo.count_external_links_for_run(selected_crawl_run_id)
+        latest_link_check_run_id = repo.get_latest_link_check_run_id_for_crawl(selected_crawl_run_id)
+        link_check_summary: dict[str, Any] = {}
+        if selected_link_check_run_id is not None:
+            lc_run = repo.get_link_check_run(selected_link_check_run_id)
+            if lc_run is not None:
+                link_check_summary = {
+                    "checked_total": lc_run.checked_total,
+                    "passed_total": lc_run.passed_total,
+                    "failed_total": lc_run.failed_total,
+                    "ignored_total": lc_run.ignored_total,
+                }
     finally:
         _close_repo(repo_and_conn)
 
@@ -1688,87 +1781,128 @@ async def dashboard_results_run(request: Request) -> HTMLResponse:
         run_rows=[log_attach_row],
     )
     run_data["log_links"] = log_attach_row["log_links"]
-    page = render_results_run_html(
-        job=job,
-        run=run_data,
-        totals={
-            "pages_total": counts["internal_urls_distinct"],
-            "external_links_total": counts["external_urls_distinct"],
-        },
-        failed_summary={
-            "failed_total": len(active_failed_all),
-            "ignored_total": len(ignored_failed_all),
-            "by_category": category_counts,
-            "per_run_category_counts": per_run_counts,
-            "comparison_run_ids": comparison_run_ids,
-        },
-        filters={
-            "include_status": include_status,
-            "include_category": include_category,
-            "status_options": sorted(status_options),
-            "category_options": sorted(category_options),
-            "filter_action": base_run_path,
-            "clear_filters_url": base_run_path,
-        },
-        failed_links=[
-            {
-                "target_url": row.target_url,
-                "status_code": row.status_code,
-                "error_category": row.error_category,
-                "error_message": row.error_message,
-                "checked_at": row.checked_at,
-                "source_pages": [ref.source_page_url for ref in sources.get(row.target_url, [])],
-                "target_href": row.target_url,
-                "source_page_hrefs": [ref.source_page_url for ref in sources.get(row.target_url, [])],
-            }
-            for row in failed_links
-        ],
-        failed_pages=[
-            {
-                "url": row.url,
-                "depth": row.depth,
-                "status_code": row.status_code,
-                "error_message": row.error_message,
-                "created_at": row.created_at,
-            }
-            for row in failed_pages
-        ],
-        ignored_links=[
-            {
-                "target_url": row.target_url,
-                "target_href": row.target_url,
-                "status_code": row.status_code,
-                "error_category": row.error_category,
-                "error_message": row.error_message,
-                "checked_at": row.checked_at,
-                "decision_reason": row.decision_reason,
-                "source_pages": [ref.source_page_url for ref in sources.get(row.target_url, [])],
-                "source_page_hrefs": [ref.source_page_url for ref in sources.get(row.target_url, [])],
-            }
-            for row in ignored_links
-        ],
-        links={
-            "nav_job_id": job_id,
-            "job": _path_for(request, "dashboard_results_job_history", job_id=job_id),
-            "run_json": with_filters(
-                f"{_path_for(request, 'api_results_run_detail', job_id=job_id, run_id=run_id)}?task_type={task_type}",
-                include_status_q=include_status,
-                include_category_q=include_category,
-            ),
-            "structure": (
-                f"{_path_for(request, 'dashboard_results_structure', job_id=job_id, run_id=run_id)}?task_type={task_type}"
-                + (f"&link_check_run_id={selected_link_check_run_id}" if selected_link_check_run_id is not None else "")
-                + "&external_mode=none"
-            ),
-            "jobs_index": _path_for(request, "dashboard_results_job_history", job_id=job_id),
-            "refresh": with_filters(
-                base_run_path,
-                include_status_q=include_status,
-                include_category_q=include_category,
-            ),
-            **_page_links(request),
-        },
+    run_duration = _format_run_duration_label(run_data.get("started_at"), run_data.get("finished_at"))
+    page_links = {
+        "nav_job_id": job_id,
+        "job": _path_for(request, "dashboard_results_job_history", job_id=job_id),
+        "run_json": with_filters(
+            f"{_path_for(request, 'api_results_run_detail', job_id=job_id, run_id=run_id)}?task_type={task_type}",
+            include_status_q=include_status,
+            include_category_q=include_category,
+        ),
+        "structure": (
+            f"{_path_for(request, 'dashboard_results_structure', job_id=job_id, run_id=selected_crawl_run_id)}?task_type=crawl"
+            + "&external_mode=none"
+        ),
+        "jobs_index": _path_for(request, "dashboard_results_job_history", job_id=job_id),
+        "refresh": with_filters(
+            base_run_path,
+            include_status_q=include_status,
+            include_category_q=include_category,
+        ),
+        **_page_links(request),
+    }
+    crawl_report_url = (
+        f"{_path_for(request, 'dashboard_results_run', job_id=job_id, run_id=selected_crawl_run_id)}?task_type=crawl"
     )
+    broken_links_url = ""
+    if latest_link_check_run_id is not None:
+        broken_links_url = (
+            f"{_path_for(request, 'dashboard_results_run', job_id=job_id, run_id=latest_link_check_run_id)}"
+            "?task_type=link_check"
+        )
+    if task_type == "crawl":
+        page = render_crawl_run_report_html(
+            job=job,
+            run={
+                **run_data,
+                "duration": run_duration,
+                "external_links": run_external_links,
+            },
+            totals={
+                "pages_total": counts["internal_urls_distinct"],
+                "external_links_total": counts["external_urls_distinct"],
+            },
+            crawl_history=crawl_history_rows,
+            ignore_patterns=crawl_ignore_patterns,
+            failed_pages=[
+                {
+                    "url": row.url,
+                    "depth": row.depth,
+                    "status_code": row.status_code,
+                    "error_message": row.error_message,
+                    "created_at": row.created_at,
+                }
+                for row in failed_pages
+            ],
+            links={
+                **page_links,
+                "broken_links": broken_links_url,
+            },
+        )
+    else:
+        page = render_link_check_run_report_html(
+            job=job,
+            run={
+                **run_data,
+                "duration": run_duration,
+                **link_check_summary,
+            },
+            totals={
+                "pages_total": counts["internal_urls_distinct"],
+                "external_links_total": counts["external_urls_distinct"],
+            },
+            failed_summary={
+                "failed_total": len(active_failed_all),
+                "ignored_total": len(ignored_failed_all),
+                "by_category": category_counts,
+                "per_run_category_counts": per_run_counts,
+                "comparison_run_ids": comparison_run_ids,
+            },
+            filters={
+                "include_status": include_status,
+                "include_category": include_category,
+                "status_options": sorted(status_options),
+                "category_options": sorted(category_options),
+                "filter_action": base_run_path,
+                "clear_filters_url": base_run_path,
+            },
+            failed_links=[
+                {
+                    "target_url": row.target_url,
+                    "status_code": row.status_code,
+                    "error_category": row.error_category,
+                    "error_message": row.error_message,
+                    "checked_at": row.checked_at,
+                    "source_pages": [ref.source_page_url for ref in sources.get(row.target_url, [])],
+                    "target_href": row.target_url,
+                    "source_page_hrefs": [ref.source_page_url for ref in sources.get(row.target_url, [])],
+                }
+                for row in failed_links
+            ],
+            ignored_links=[
+                {
+                    "target_url": row.target_url,
+                    "target_href": row.target_url,
+                    "status_code": row.status_code,
+                    "error_category": row.error_category,
+                    "error_message": row.error_message,
+                    "checked_at": row.checked_at,
+                    "decision_reason": row.decision_reason,
+                    "source_pages": [ref.source_page_url for ref in sources.get(row.target_url, [])],
+                    "source_page_hrefs": [ref.source_page_url for ref in sources.get(row.target_url, [])],
+                }
+                for row in ignored_links
+            ],
+            links={
+                **page_links,
+                "crawl_run": crawl_report_url,
+                "structure": (
+                    f"{_path_for(request, 'dashboard_results_structure', job_id=job_id, run_id=selected_crawl_run_id)}"
+                    f"?task_type=crawl&link_check_run_id={selected_link_check_run_id}&external_mode=none"
+                ),
+            },
+        )
     return HTMLResponse(page)
 
 
@@ -1808,6 +1942,8 @@ async def dashboard_results_structure(request: Request) -> HTMLResponse:
         run = repo.get_run_record(job_id=job_id, run_id=selected_crawl_run_id)
         if run is None:
             return HTMLResponse("Run not found", status_code=404)
+        if selected_link_check_run_id is None:
+            selected_link_check_run_id = repo.get_latest_link_check_run_id_for_crawl(selected_crawl_run_id)
         page_rows = repo.list_page_external_link_counts(selected_crawl_run_id, limit=10_000)
         failed_rows = repo.list_latest_failed_link_check_results(
             selected_crawl_run_id,
@@ -1851,6 +1987,12 @@ async def dashboard_results_structure(request: Request) -> HTMLResponse:
     finally:
         _close_repo(repo_and_conn)
     run_page_url = f"{_path_for(request, 'dashboard_results_run', job_id=job_id, run_id=selected_crawl_run_id)}?task_type=crawl"
+    broken_links_url = ""
+    if selected_link_check_run_id is not None:
+        broken_links_url = (
+            f"{_path_for(request, 'dashboard_results_run', job_id=job_id, run_id=selected_link_check_run_id)}"
+            "?task_type=link_check"
+        )
     structure_payload = _build_structure_tree_payload(
         job_id=job_id,
         run_id=selected_crawl_run_id,
@@ -1880,6 +2022,7 @@ async def dashboard_results_structure(request: Request) -> HTMLResponse:
             "nav_job_id": job_id,
             "job": _path_for(request, "dashboard_results_job_history", job_id=job_id),
             "run": run_page_url,
+            "broken_links": broken_links_url,
             "structure_json": (
                 f"{_path_for(request, 'api_results_run_structure', job_id=job_id, run_id=run_id)}?task_type={task_type}"
                 + (f"&link_check_run_id={selected_link_check_run_id}" if selected_link_check_run_id is not None else "")

@@ -2153,6 +2153,17 @@ class CrawlRepository:
             for row in rows
         ]
 
+    def count_external_links_for_run(self, run_id: int) -> int:
+        row = self._connection.execute(
+            """
+            SELECT COUNT(DISTINCT external_link_id) AS n
+            FROM run_external_links
+            WHERE run_id = ?
+            """,
+            (run_id,),
+        ).fetchone()
+        return int(row["n"]) if row else 0
+
     def list_page_external_link_counts(self, run_id: int, *, limit: int = 5000) -> list[PageExternalCountRecord]:
         rows = self._connection.execute(
             """

@@ -242,25 +242,41 @@ def test_dashboard_results_pages(tmp_path: Path) -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
     (log_dir / f"{log_day}.log").write_text("blink-test-log-line\n", encoding="utf-8")
 
+    crawl_page = client.get(f"/dashboard/results/zzz/runs/{run_id}?task_type=crawl")
+    assert crawl_page.status_code == 200
+    assert "Crawl run" in crawl_page.text
+    assert "Crawl history" in crawl_page.text
+    assert "Failed crawl pages" in crawl_page.text
+    assert "Ignored URL patterns" in crawl_page.text
+    assert "run logs" in crawl_page.text
+    assert f"/dashboard/results/zzz/logs/{log_day}" in crawl_page.text
+    assert "Failed link-check results" not in crawl_page.text
+    assert "&lt; Dashboard" in crawl_page.text
+    assert "&lt; job" in crawl_page.text
+
+    link_page = client.get(f"/dashboard/results/zzz/runs/{link_check_run_id}?task_type=link_check")
+    assert link_page.status_code == 200
+    assert "Broken links" in link_page.text
+    assert f"crawl run {run_id}" in link_page.text
+    assert "Failed link-check results" in link_page.text
+    assert "https://broken.example.net" in link_page.text
+    assert "https://ignored.example.net" in link_page.text
+    assert "Ignored link-check results" in link_page.text
+    assert "delta-down" in link_page.text or "delta-up" in link_page.text
+    assert "<strong>Total</strong>" in link_page.text
+    assert "Apply filters" in link_page.text
+    assert "Failed crawl pages" not in link_page.text
+
     run_page = client.get(f"/dashboard/results/zzz/runs/{run_id}")
     assert run_page.status_code == 200
-    assert "run logs" in run_page.text
-    assert f"/dashboard/results/zzz/logs/{log_day}" in run_page.text
-    assert "Failed link-check results" in run_page.text
-    assert "https://broken.example.net" in run_page.text
-    assert "https://ignored.example.net" in run_page.text
-    assert "Ignored link-check results (latest per target)" in run_page.text
-    assert "Run summary" in run_page.text
-    assert "< Dashboard" in run_page.text
-    assert "< job" in run_page.text
-    assert "Apply filters" in run_page.text
-    assert "Field" not in run_page.text
+    assert "Crawl run" in run_page.text
 
     structure_page = client.get(f"/dashboard/results/zzz/runs/{run_id}/structure")
     assert structure_page.status_code == 200
     assert "Radial tidy tree" in structure_page.text
-    assert "Website structure JSON" in structure_page.text
-    assert "Open run details" in structure_page.text
+    assert "/structure" in structure_page.text and "download" in structure_page.text
+    assert "crawl run report" in structure_page.text
+    assert "broken links report" in structure_page.text
     assert "page-main-text" in structure_page.text
     assert "id=\"structure-payload\"" in structure_page.text
     assert "id=\"linkCheckRun\"" in structure_page.text
@@ -330,7 +346,7 @@ def test_dashboard_results_pages_honor_proxy_root_path(tmp_path: Path) -> None:
 
 
 def test_dashboard_results_pages_honor_configured_base_path(tmp_path: Path) -> None:
-    _, run_id, _ = _setup_job_with_data(tmp_path)
+    _, run_id, link_check_run_id = _setup_job_with_data(tmp_path)
     app = build_app(jobs_root=tmp_path, route_base_path="/blink")
     client = TestClient(app)
 
@@ -338,7 +354,9 @@ def test_dashboard_results_pages_honor_configured_base_path(tmp_path: Path) -> N
     assert jobs_page.status_code == 200
     assert "/blink/dashboard/results/zzz" in jobs_page.text
 
-    run_page = client.get(f"/dashboard/results/zzz/runs/{run_id}?include_category=client&exclude_status=403")
+    run_page = client.get(
+        f"/dashboard/results/zzz/runs/{link_check_run_id}?task_type=link_check&include_category=client"
+    )
     assert run_page.status_code == 200
     assert "/blink/api/results/jobs/zzz/runs/" in run_page.text
     assert "Clear" in run_page.text

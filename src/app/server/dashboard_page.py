@@ -10,7 +10,6 @@ from urllib.parse import urlsplit
 
 _LINK_CHECK_CHILD_MARKER = "\u2b11"  # ↫ LEFTWARDS ARROW WITH TIP UPWARDS
 
-
 def _fmt_dt_short(value: object, *, ongoing: bool = False) -> str:
     if value is None or str(value).strip() == "":
         return "ongoing" if ongoing else "—"
@@ -26,13 +25,11 @@ def _fmt_dt_short(value: object, *, ongoing: bool = False) -> str:
         parsed = parsed.astimezone(UTC)
     return parsed.strftime("%Y-%m-%d %H:%M")
 
-
 def _html_action_link(url: object, label: str) -> str:
     href = str(url or "").strip()
     if not href:
         return "—"
     return f'<a href="{html.escape(href)}">{html.escape(label)}</a>'
-
 
 def _html_log_links_cell(run: dict[str, Any]) -> str:
     view_url = str(run.get("logs_view_url") or "").strip()
@@ -45,7 +42,6 @@ def _html_log_links_cell(run: dict[str, Any]) -> str:
         f'<a href="{html.escape(str(url))}">{html.escape(str(d))}</a>' for url, d in pairs
     )
 
-
 def _auth_nav_html(links: dict[str, str]) -> str:
     user = str(links.get("auth_user") or "").strip()
     logout = str(links.get("auth_logout") or "").strip()
@@ -53,7 +49,6 @@ def _auth_nav_html(links: dict[str, str]) -> str:
         return ""
     logout_link = f' · <a href="{html.escape(logout)}">Log out</a>' if logout else ""
     return f'<span class="auth-user">Signed in as {html.escape(user)}</span>{logout_link}'
-
 
 def _header_nav_links(links: dict[str, str]) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
@@ -65,14 +60,12 @@ def _header_nav_links(links: dict[str, str]) -> list[tuple[str, str]]:
         out.append(("< job", job_url))
     return out
 
-
 def _render_header_nav(links: dict[str, str]) -> str:
     nav_html = "\n".join(f'<a href="{esc(href)}">{esc(label)}</a>' for label, href in _header_nav_links(links) if href)
     auth_html = _auth_nav_html(links)
     if auth_html:
         nav_html = f"{nav_html}\n{auth_html}" if nav_html else auth_html
     return nav_html
-
 
 def _footer_links_html(
     links: dict[str, str],
@@ -90,13 +83,11 @@ def _footer_links_html(
             parts.append(f'<a href="{esc(href)}">{esc(label)}</a>')
     return " · ".join(parts)
 
-
 def _html_report_link_cell(run: dict[str, Any]) -> str:
     view_url = str(run.get("json_view_url") or run.get("report_url") or "").strip()
     if not view_url:
         return "—"
     return _html_action_link(view_url, "json")
-
 
 def render_admin_runtime_html(*, diagnostics: dict[str, Any], links: dict[str, str]) -> str:
     """Admin-only page for paths, scheduler runtime, and environment variables."""
@@ -154,7 +145,6 @@ def render_admin_runtime_html(*, diagnostics: dict[str, Any], links: dict[str, s
         show_table_header=False,
         branding_links=links,
     )
-
 
 def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, str]) -> str:
     """Build scheduler dashboard HTML using request-aware links."""
@@ -756,12 +746,10 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
 </html>
 """
 
-
 def _task_sort_key(t: dict[str, Any]) -> tuple[str, str, str]:
     rt = t.get("runtime") or {}
     next_at = str(rt.get("next_run_at") or "")
     return (next_at, str(t.get("job_id") or ""), str(t.get("task_type") or ""))
-
 
 def _status_cell(rt: dict[str, Any]) -> str:
     running = bool(rt.get("running"))
@@ -773,7 +761,6 @@ def _status_cell(rt: dict[str, Any]) -> str:
     if int(code) == 0:
         return '<span class="dot dot-ok"></span>OK'
     return '<span class="dot dot-fail"></span>Failed'
-
 
 def render_results_jobs_html(payload: dict[str, Any], *, links: dict[str, str]) -> str:
     """Render job-centric results index (history-first navigation)."""
@@ -828,7 +815,6 @@ def render_results_jobs_html(payload: dict[str, Any], *, links: dict[str, str]) 
         footer_extra=(links.get("refresh", ""), "Refresh"),
         branding_links=links,
     )
-
 
 def render_results_job_html(
     *,
@@ -1012,7 +998,6 @@ def render_results_job_html(
         branding_links=links,
     )
 
-
 def render_results_structure_html(
     *,
     job: dict[str, Any],
@@ -1058,7 +1043,12 @@ def render_results_structure_html(
             f"<tr><td>Node count</td><td class=\"mono\">{esc(tree_payload.get('node_count') or 0)}</td></tr>"
             f"<tr><td>Leaf pages</td><td class=\"mono\">{esc(tree_payload.get('leaf_count') or 0)}</td></tr>"
             f"<tr><td>JSON</td><td>{_html_action_link(links.get('structure_json'), 'download')}</td></tr>"
-            f"<tr><td>Run</td><td>{_html_action_link(links.get('run'), 'open run detail')}</td></tr>"
+            f"<tr><td>Crawl report</td><td>{_html_action_link(links.get('run'), 'crawl run report')}</td></tr>"
+            + (
+                f"<tr><td>Broken links</td><td>{_html_action_link(links.get('broken_links'), 'broken links report')}</td></tr>"
+                if links.get("broken_links")
+                else ""
+            )
         ),
         footer_extra=(links.get("refresh", ""), "Refresh"),
         body_extra=f"""
@@ -1401,7 +1391,6 @@ def render_results_structure_html(
         branding_links=links,
     )
 
-
 def _history_run_row(run: dict[str, Any], *, child: bool) -> str:
     def _fmt_count(value: object) -> str:
         return esc(value if value not in (None, "") else "—")
@@ -1435,7 +1424,6 @@ def _history_run_row(run: dict[str, Any], *, child: bool) -> str:
     <td>{logs_cell}</td>
     <td>{json_cell}</td>
   </tr>"""
-
 
 def render_file_viewer_html(
     *,
@@ -1473,7 +1461,6 @@ def render_file_viewer_html(
         branding_links=links,
     )
 
-
 def render_job_task_history_html(
     *,
     job: dict[str, Any],
@@ -1499,8 +1486,191 @@ def render_job_task_history_html(
         branding_links=links,
     )
 
+def _history_metric_cell(current: int, previous: int | None) -> str:
+    if previous is None:
+        return esc(current)
+    diff = current - previous
+    if diff == 0:
+        return esc(current)
+    diff_class = "delta-down" if diff < 0 else "delta-up"
+    return f'{esc(current)} <span class="{diff_class}">({diff:+d})</span>'
 
-def render_results_run_html(
+def _category_count_cell(count: int, prev_count: int | None) -> str:
+    if prev_count is None:
+        return esc(str(count))
+    diff = count - prev_count
+    if diff == 0:
+        return f"{count} (0)"
+    diff_class = "delta-down" if diff < 0 else "delta-up"
+    return f'{count} (<span class="{diff_class}">{diff:+d}</span>)'
+
+def _render_ignore_patterns_panel(ignore_patterns: dict[str, list[str]]) -> str:
+    if not ignore_patterns:
+        return (
+            '<section class="panel" aria-label="Ignored URL patterns">'
+            '<div class="panel-head">Ignored URL patterns (job config)</div>'
+            '<p style="padding: 0.75rem 1rem; margin: 0; color: var(--muted);">No crawl ignore patterns configured.</p>'
+            "</section>"
+        )
+    rows: list[str] = []
+    labels = {
+        "url_schemes": "URL schemes",
+        "netloc_contains": "Host contains",
+        "path_contains": "Path contains",
+        "path_extensions": "Path extensions",
+        "fragment_contains": "Fragment contains",
+    }
+    for key in ("url_schemes", "netloc_contains", "path_contains", "path_extensions", "fragment_contains"):
+        patterns = ignore_patterns.get(key) or []
+        if not patterns:
+            continue
+        listed = ", ".join(esc(p) for p in patterns)
+        rows.append(f"<tr><td>{esc(labels.get(key, key))}</td><td class=\"wrap-col\">{listed}</td></tr>")
+    body = "".join(rows) if rows else '<tr><td colspan="2" class="empty">No patterns configured.</td></tr>'
+    return f"""
+<section class="panel" aria-label="Ignored URL patterns">
+  <div class="panel-head">Ignored URL patterns (job config)</div>
+  <div class="panel-scroll">
+  <table class="data-table">
+    <thead><tr><th>Rule type</th><th>Patterns</th></tr></thead>
+    <tbody>{body}</tbody>
+  </table>
+  </div>
+</section>
+"""
+
+
+
+def render_crawl_run_report_html(
+    *,
+    job: dict[str, Any],
+    run: dict[str, Any],
+    totals: dict[str, int],
+    crawl_history: list[dict[str, Any]],
+    ignore_patterns: dict[str, list[str]],
+    failed_pages: list[dict[str, Any]],
+    links: dict[str, str],
+) -> str:
+    """Render crawl-run report: crawl metrics, history, failures, ignore patterns."""
+
+    history_rows: list[str] = []
+    for i, row in enumerate(crawl_history):
+        prev = crawl_history[i + 1] if i + 1 < len(crawl_history) else None
+        prev_pages = int(prev["pages_visited"]) if prev else None
+        prev_external = int(prev["external_links"]) if prev else None
+        prev_ignored = prev.get("ignored_links") if prev else None
+        cur_ignored = row.get("ignored_links")
+        ignored_display = "—"
+        if cur_ignored is not None:
+            ignored_display = _history_metric_cell(
+                int(cur_ignored),
+                int(prev_ignored) if prev_ignored is not None else None,
+            )
+        run_label = f"run {row.get('run_id')}"
+        if row.get("is_current"):
+            run_label += " (this run)"
+        history_rows.append(
+            f"""<tr>
+    <td class="mono">{esc(run_label)}</td>
+    <td class="mono time">{esc(_fmt_dt_short(row.get("started_at")))}</td>
+    <td class="mono time">{esc(_fmt_dt_short(row.get("finished_at"), ongoing=not row.get("finished_at")))}</td>
+    <td class="mono">{esc(row.get("duration") or "—")}</td>
+    <td class="mono">{_history_metric_cell(int(row.get("pages_visited") or 0), prev_pages)}</td>
+    <td class="mono">{_history_metric_cell(int(row.get("external_links") or 0), prev_external)}</td>
+    <td class="mono">{ignored_display}</td>
+    <td class="mono">{esc(row.get("pages_failed"))}</td>
+  </tr>"""
+        )
+    history_body = "".join(history_rows) if history_rows else (
+        '<tr><td colspan="8" class="empty">No crawl history available.</td></tr>'
+    )
+
+    failed_page_rows = "\n".join(
+        f"""<tr>
+    <td class="mono">{esc(item.get("url", ""))}</td>
+    <td class="mono">{esc(item.get("depth", ""))}</td>
+    <td class="mono">{esc(item.get("status_code") if item.get("status_code") is not None else "—")}</td>
+    <td>{esc(item.get("error_message") or "—")}</td>
+    <td class="mono">{esc(item.get("created_at") or "—")}</td>
+  </tr>"""
+        for item in failed_pages
+    )
+    if not failed_page_rows:
+        failed_page_rows = '<tr><td colspan="5" class="empty">No failed crawl pages for this run.</td></tr>'
+
+    broken_links_cell = (
+        _html_action_link(links.get("broken_links"), "broken links report") if links.get("broken_links") else "—"
+    )
+    structure_cell = _html_action_link(links.get("structure"), "website structure")
+    run_json_cell = _html_action_link(links.get("run_json"), "json")
+
+    run_stats = f"""
+<section class="metrics" aria-label="Crawl summary">
+  <div class="metric"><div class="value">{esc(run.get("pages_visited"))}</div><div class="label">Pages crawled</div></div>
+  <div class="metric"><div class="value">{esc(run.get("pages_failed"))}</div><div class="label">Pages failed</div></div>
+  <div class="metric"><div class="value">{esc(run.get("links_discovered"))}</div><div class="label">Links discovered</div></div>
+  <div class="metric"><div class="value">{esc(run.get("external_links"))}</div><div class="label">External links (this run)</div></div>
+  <div class="metric"><div class="value">{esc(totals.get("pages_total"))}</div><div class="label">Pages covered (job)</div></div>
+  <div class="metric"><div class="value">{esc(totals.get("external_links_total"))}</div><div class="label">External URLs (job)</div></div>
+</section>
+"""
+    body_extra = f"""
+{run_stats}
+<section class="panel" aria-label="Crawl history comparison">
+  <div class="panel-head">Crawl history (this run and up to 3 previous)</div>
+  <p style="padding: 0 1rem 0.5rem; margin: 0; font-size: 0.8rem; color: var(--muted);">
+    Parentheses show change vs the next older run.
+    Ignored counts come from the latest link-check on each crawl when available.
+  </p>
+  <div class="panel-scroll">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Run</th><th>Started</th><th>Finished</th><th>Duration</th>
+        <th>Pages crawled</th><th>External links</th><th>Ignored (link-check)</th><th>Pages failed</th>
+      </tr>
+    </thead>
+    <tbody>{history_body}</tbody>
+  </table>
+  </div>
+</section>
+{_render_ignore_patterns_panel(ignore_patterns)}
+<section class="panel" aria-label="Failed crawl pages" style="margin-top: 1rem;">
+  <div class="panel-head">Failed crawl pages</div>
+  <div class="panel-scroll">
+  <table class="data-table">
+    <thead>
+      <tr><th>URL</th><th>Depth</th><th>Status</th><th>Error</th><th>Created</th></tr>
+    </thead>
+    <tbody>{failed_page_rows}</tbody>
+  </table>
+  </div>
+</section>
+"""
+    return _render_results_shell(
+        title=f"Blink crawl report · {esc(job.get('job_id', ''))} run {esc(run.get('run_id', ''))}",
+        heading=f"Crawl run · {esc(job.get('job_id', ''))}",
+        subtitle=f"{esc(job.get('name', ''))} · run {esc(run.get('run_id', ''))}",
+        panel_title="Overview",
+        table_headers=["Field", "Value"],
+        table_rows=(
+            f"<tr><td>job id</td><td class=\"mono\">{esc(job.get('job_id', ''))}</td></tr>"
+            f"<tr><td>crawl run id</td><td class=\"mono\">{esc(run.get('run_id', ''))}</td></tr>"
+            f"<tr><td>started</td><td class=\"mono\">{esc(run.get('started_at') or '—')}</td></tr>"
+            f"<tr><td>finished</td><td class=\"mono\">{esc(run.get('finished_at') or '—')}</td></tr>"
+            f"<tr><td>duration</td><td class=\"mono\">{esc(run.get('duration') or '—')}</td></tr>"
+            f"<tr><td>run logs</td><td>{_html_log_links_cell(run)}</td></tr>"
+            f"<tr><td>website structure</td><td>{structure_cell}</td></tr>"
+            f"<tr><td>broken links</td><td>{broken_links_cell}</td></tr>"
+            f"<tr><td>run data</td><td>{run_json_cell}</td></tr>"
+        ),
+        footer_extra=(links.get("refresh", ""), "Refresh"),
+        body_extra=body_extra,
+        show_table_header=False,
+        branding_links=links,
+    )
+
+def render_link_check_run_report_html(
     *,
     job: dict[str, Any],
     run: dict[str, Any],
@@ -1508,11 +1678,10 @@ def render_results_run_html(
     failed_summary: dict[str, Any],
     filters: dict[str, Any],
     failed_links: list[dict[str, Any]],
-    failed_pages: list[dict[str, Any]],
     ignored_links: list[dict[str, Any]],
     links: dict[str, str],
 ) -> str:
-    """Render one run's crawl/link-check details."""
+    """Render broken-links report for one link-check run."""
 
     comparison_run_ids: list[int] = list(failed_summary.get("comparison_run_ids") or [])
     per_run_counts: dict[int, dict[str, int]] = dict(failed_summary.get("per_run_category_counts") or {})
@@ -1520,41 +1689,45 @@ def render_results_run_html(
     for counts in per_run_counts.values():
         all_categories.update(counts.keys())
 
-    based_on_metric = ""
-    if str(run.get("task_type") or "crawl") == "link_check":
-        based_on_metric = (
-            f'<div class="metric"><div class="value">{esc(run.get("link_check_run_id") or run.get("run_id"))}</div>'
-            '<div class="label">Link-check run id</div></div>'
-            f'<div class="metric"><div class="value">{esc(run.get("based_on_crawl_run_id") or "—")}</div>'
-            '<div class="label">Based on crawl run id</div></div>'
-        )
     run_stats = f"""
-<section class="metrics" aria-label="Run summary">
-  <div class="metric"><div class="value">{esc(run.get("pages_visited"))}</div><div class="label">Pages visited <span class="info-icon" title="Number of pages crawled in this run.">(i)</span></div></div>
-  <div class="metric"><div class="value">{esc(totals.get("pages_total"))}</div><div class="label">Pages covered <span class="info-icon" title="Distinct internal pages currently known for this job DB.">(i)</span></div></div>
-  <div class="metric"><div class="value">{esc(_fmt_count_with_ratio(totals.get("external_links_total"), totals.get("pages_total")))}</div><div class="label">External links <span class="info-icon" title="Distinct external target URLs currently known for this job DB. Ratio is vs pages covered.">(i)</span></div></div>
-  <div class="metric"><div class="value">{esc(_fmt_count_with_ratio(failed_summary.get("failed_total"), totals.get("external_links_total")))}</div><div class="label">Failed links <span class="info-icon" title="Latest failed link-check targets in this run before filtering. Ratio is vs external links.">(i)</span></div></div>
-  <div class="metric"><div class="value">{esc(_fmt_count_with_ratio(failed_summary.get("ignored_total", 0), totals.get("external_links_total")))}</div><div class="label">Ignored links <span class="info-icon" title="Latest link-check targets suppressed by ignore rules (status/category/message/domain). Ratio is vs external links.">(i)</span></div></div>
-  {based_on_metric}
+<section class="metrics" aria-label="Link-check summary">
+  <div class="metric"><div class="value">{esc(run.get("checked_total", "—"))}</div><div class="label">Checked</div></div>
+  <div class="metric"><div class="value">{esc(run.get("failed_total", failed_summary.get("failed_total")))}</div><div class="label">Failed</div></div>
+  <div class="metric"><div class="value">{esc(run.get("ignored_total", failed_summary.get("ignored_total", 0)))}</div><div class="label">Ignored</div></div>
+  <div class="metric"><div class="value">{esc(run.get("passed_total", "—"))}</div><div class="label">Passed</div></div>
+  <div class="metric"><div class="value">{esc(_fmt_count_with_ratio(failed_summary.get("failed_total"), totals.get("external_links_total")))}</div><div class="label">Failed vs external URLs</div></div>
+  <div class="metric"><div class="value">{esc(run.get("link_check_run_id") or run.get("run_id"))}</div><div class="label">Link-check run id</div></div>
 </section>
 """
     column_labels = [f"run {rid}" for rid in comparison_run_ids]
     category_rows_list: list[str] = []
+    summary_cells: list[str] = []
+    for col_idx, rid in enumerate(comparison_run_ids):
+        total = sum(int(per_run_counts.get(rid, {}).get(cat, 0)) for cat in all_categories)
+        prev_rid = comparison_run_ids[col_idx + 1] if col_idx + 1 < len(comparison_run_ids) else None
+        prev_total = (
+            sum(int(per_run_counts.get(prev_rid, {}).get(cat, 0)) for cat in all_categories)
+            if prev_rid is not None
+            else None
+        )
+        summary_cells.append(f'<td class="mono"><strong>{_category_count_cell(total, prev_total)}</strong></td>')
+
     for category in sorted(all_categories):
         counts = [int(per_run_counts.get(rid, {}).get(category, 0)) for rid in comparison_run_ids]
-        cells: list[str] = []
-        for i, count in enumerate(counts):
-            if i + 1 < len(counts):
-                diff = count - counts[i + 1]
-                diff_str = f"{diff:+d}"
-                cells.append(f"{count} ({diff_str})")
-            else:
-                cells.append(f"{count} (n/a)")
-        cells_html = "".join(f'<td class="mono">{esc(v)}</td>' for v in cells)
+        cells_html = "".join(
+            f'<td class="mono">{_category_count_cell(count, counts[i + 1] if i + 1 < len(counts) else None)}</td>'
+            for i, count in enumerate(counts)
+        )
         category_rows_list.append(f"<tr><td>{esc(category)}</td>{cells_html}</tr>")
-    category_rows = "".join(category_rows_list)
-    if not category_rows:
-        category_rows = '<tr><td colspan="4" class="empty">No failed external links in this run.</td></tr>'
+    summary_row = (
+        f'<tr class="summary-row"><td><strong>Total</strong></td>{"".join(summary_cells)}</tr>'
+        if summary_cells
+        else ""
+    )
+    category_rows = "".join(category_rows_list) + summary_row
+    if not category_rows_list:
+        colspan = max(len(column_labels) + 1, 2)
+        category_rows = f'<tr><td colspan="{colspan}" class="empty">No failed external links in this run.</td></tr>'
 
     status_options = sorted(list(filters.get("status_options") or []))
     category_options = sorted(list(filters.get("category_options") or []))
@@ -1587,19 +1760,6 @@ def render_results_run_html(
     if not failed_link_rows:
         failed_link_rows = '<tr><td colspan="5" class="empty">No failed links for this run.</td></tr>'
 
-    failed_page_rows = "\n".join(
-        f"""<tr>
-    <td class="mono">{esc(item.get("url", ""))}</td>
-    <td class="mono">{esc(item.get("depth", ""))}</td>
-    <td class="mono">{esc(item.get("status_code") if item.get("status_code") is not None else "—")}</td>
-    <td>{esc(item.get("error_message") or "—")}</td>
-    <td class="mono">{esc(item.get("created_at") or "—")}</td>
-  </tr>"""
-        for item in failed_pages
-    )
-    if not failed_page_rows:
-        failed_page_rows = '<tr><td colspan="5" class="empty">No failed crawl pages for this run.</td></tr>'
-
     ignored_link_rows = "\n".join(
         f"""<tr>
     <td class="source-col">{_render_target_and_sources(item)}</td>
@@ -1618,6 +1778,9 @@ def render_results_run_html(
 {run_stats}
 <section class="panel" aria-label="Failed by category">
   <div class="panel-head">Failed external links by error category</div>
+  <p style="padding: 0 1rem 0.5rem; margin: 0; font-size: 0.8rem; color: var(--muted);">
+    Green deltas are decreases vs the next older column; red deltas are increases.
+  </p>
   <div class="panel-scroll">
   <table class="data-table">
     <thead><tr><th>Error category</th>{''.join(f'<th>{esc(label)}</th>' for label in column_labels)}</tr></thead>
@@ -1626,7 +1789,7 @@ def render_results_run_html(
   </div>
 </section>
 <section class="panel" aria-label="Global filters">
-  <div class="panel-head">Global filters</div>
+  <div class="panel-head">Filters</div>
   <div class="filters-row">
     <form method="get" action="{filter_action}" class="filters-form">
       <label>Include status
@@ -1641,7 +1804,7 @@ def render_results_run_html(
   </div>
 </section>
 <section class="panel" aria-label="Failed links" style="margin-top: 1rem;">
-  <div class="panel-head">Failed link-check results (latest per target)</div>
+  <div class="panel-head">Failed link-check results</div>
   <div class="panel-scroll">
   <table class="data-table sticky-head">
     <thead>
@@ -1651,19 +1814,8 @@ def render_results_run_html(
   </table>
   </div>
 </section>
-<section class="panel" aria-label="Failed crawl pages" style="margin-top: 1rem;">
-  <div class="panel-head">Failed crawl pages</div>
-  <div class="panel-scroll">
-  <table class="data-table">
-    <thead>
-      <tr><th>URL</th><th>Depth</th><th>Status</th><th>Error</th><th>Created</th></tr>
-    </thead>
-    <tbody>{failed_page_rows}</tbody>
-  </table>
-  </div>
-</section>
 <section class="panel" aria-label="Ignored external links" style="margin-top: 1rem;">
-  <div class="panel-head">Ignored link-check results (latest per target)</div>
+  <div class="panel-head">Ignored link-check results</div>
   <div class="panel-scroll">
   <table class="data-table">
     <thead><tr><th>Target URL</th><th>Status</th><th>Category</th><th>Reason</th><th>Error</th><th>Checked at</th></tr></thead>
@@ -1672,19 +1824,25 @@ def render_results_run_html(
   </div>
 </section>
 """
+    crawl_run_cell = _html_action_link(links.get("crawl_run"), f"crawl run {run.get('based_on_crawl_run_id') or '—'}")
     structure_cell = _html_action_link(links.get("structure"), "website structure")
     run_json_cell = _html_action_link(links.get("run_json"), "json")
     return _render_results_shell(
-        title=f"Blink results · {esc(job.get('job_id', ''))} run {esc(run.get('run_id', ''))}",
-        heading=f"Run detail · {esc(job.get('job_id', ''))}",
-        subtitle=f"{esc(job.get('name', ''))} ({esc('enabled' if job.get('enabled') else 'disabled')})",
+        title=f"Blink broken links · {esc(job.get('job_id', ''))} run {esc(run.get('run_id', ''))}",
+        heading=f"Broken links · {esc(job.get('job_id', ''))}",
+        subtitle=(
+            f"{esc(job.get('name', ''))} · link-check run {esc(run.get('run_id', ''))} "
+            f"(crawl run {esc(run.get('based_on_crawl_run_id') or '—')})"
+        ),
         panel_title="Overview",
         table_headers=["Field", "Value"],
         table_rows=(
             f"<tr><td>job id</td><td class=\"mono\">{esc(job.get('job_id', ''))}</td></tr>"
-            f"<tr><td>job name</td><td>{esc(job.get('name', ''))}</td></tr>"
-            f"<tr><td>run start</td><td class=\"mono\">{esc(run.get('started_at') or '—')}</td></tr>"
-            f"<tr><td>run end</td><td class=\"mono\">{esc(run.get('finished_at') or '—')}</td></tr>"
+            f"<tr><td>link-check run id</td><td class=\"mono\">{esc(run.get('run_id', ''))}</td></tr>"
+            f"<tr><td>based on crawl run</td><td>{crawl_run_cell}</td></tr>"
+            f"<tr><td>started</td><td class=\"mono\">{esc(run.get('started_at') or '—')}</td></tr>"
+            f"<tr><td>finished</td><td class=\"mono\">{esc(run.get('finished_at') or '—')}</td></tr>"
+            f"<tr><td>duration</td><td class=\"mono\">{esc(run.get('duration') or '—')}</td></tr>"
             f"<tr><td>run logs</td><td>{_html_log_links_cell(run)}</td></tr>"
             f"<tr><td>website structure</td><td>{structure_cell}</td></tr>"
             f"<tr><td>run data</td><td>{run_json_cell}</td></tr>"
@@ -1694,7 +1852,6 @@ def render_results_run_html(
         show_table_header=False,
         branding_links=links,
     )
-
 
 def _render_results_shell(
     *,
@@ -1748,7 +1905,6 @@ def _render_results_shell(
 </body>
 </html>
 """
-
 
 def _shared_styles() -> str:
     return """
@@ -1834,6 +1990,9 @@ def _shared_styles() -> str:
   .source-arrow { margin-right: 0.2rem; color: var(--muted); }
   .source-link { display: inline; }
   .sticky-head thead th { position: sticky; top: 0; z-index: 1; }
+  .delta-down { color: var(--success); font-weight: 600; }
+  .delta-up { color: var(--danger); font-weight: 600; }
+  tr.summary-row td { background: #f1f5f9; border-top: 2px solid var(--border); font-weight: 600; }
   .mono { font-family: ui-monospace, "Cascadia Code", "SF Mono", Menlo, monospace; font-size: 0.78rem; }
   .time { white-space: nowrap; }
   .run-child-marker { color: var(--muted); margin-right: 0.15rem; }
@@ -1851,10 +2010,8 @@ def _shared_styles() -> str:
 </style>
 """
 
-
 def esc(s: object) -> str:
     return html.escape("" if s is None else str(s))
-
 
 def _favicon_head(links: dict[str, str]) -> str:
     bits: list[str] = []
@@ -1868,7 +2025,6 @@ def _favicon_head(links: dict[str, str]) -> str:
         bits.append(f'<link rel="manifest" href="{esc(links["manifest"])}"/>')
     return "\n  ".join(bits)
 
-
 def _brand_header(links: dict[str, str]) -> str:
     logo_url = str(links.get("logo_url") or "").strip()
     if not logo_url:
@@ -1879,7 +2035,6 @@ def _brand_header(links: dict[str, str]) -> str:
         '<span class="brand-name">Blink</span>'
         "</div>"
     )
-
 
 def _auth_form_styles() -> str:
     return """
@@ -1898,7 +2053,6 @@ def _auth_form_styles() -> str:
   .auth-plain-error { padding: 1.25rem 1.5rem; font-size: 0.9rem; line-height: 1.55; white-space: pre-wrap; color: var(--text); }
 </style>
 """
-
 
 def render_auth_page(
     *,
@@ -1943,7 +2097,6 @@ def render_auth_page(
 </html>
 """
 
-
 def _render_link_list(urls: list[str]) -> str:
     if not urls:
         return "—"
@@ -1951,7 +2104,6 @@ def _render_link_list(urls: list[str]) -> str:
         f'<a href="{esc(url)}" target="_blank" rel="noopener noreferrer">{esc(url)}</a>'
         for url in urls
     )
-
 
 def _render_target_and_sources(item: dict[str, Any]) -> str:
     target_url = str(item.get("target_url", "") or "")
@@ -1969,7 +2121,6 @@ def _render_target_and_sources(item: dict[str, Any]) -> str:
         f'<div class="source-list">{source_rows}</div>'
     )
 
-
 def _source_label(url: str) -> str:
     """Return compact label (path/query/fragment) for source URLs."""
     raw = str(url or "").strip()
@@ -1983,7 +2134,6 @@ def _source_label(url: str) -> str:
         compact = f"{path}{query}{fragment}"
         return compact or "/"
     return raw.lstrip("/") or raw
-
 
 def _fmt_count_with_ratio(value: object, total: object) -> str:
     try:
