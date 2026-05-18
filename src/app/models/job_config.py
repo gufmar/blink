@@ -93,6 +93,7 @@ class LinkCheckIgnoreConfig(TypedDict):
     http_status: list[int]
     error_category: list[Literal["client", "server", "timeout", "connection", "other"]]
     error_message_contains: list[str]
+    browser_engine_error_contains: list[str]
     target_netloc_contains: list[str]
     target_domain_equals: list[str]
 

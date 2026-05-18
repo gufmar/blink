@@ -93,6 +93,8 @@ URL behavior is split by concern:
 - `crawl.url_normalization.external.store_raw_href` preserves exact external hrefs for persistence/reporting.
 - `link_check.target_url_policy.request.keep_query|keep_fragment` controls the URL form used for outbound link-check requests.
 - `link_check.ignore.http_status` controls ignored HTTP status codes, and `link_check.ignore.url_schemes` controls ignored URL schemes (for example `mailto`) during link-check execution.
+- `link_check.ignore.error_message_contains` ignores failures when the error text matches (for example Cloudflare/Vercel challenge phrases appended by checkers).
+- `link_check.ignore.browser_engine_error_contains` ignores Playwright navigation/transport failures (no HTTP status) when the error text matches; HTTP response failures such as `403` are not affected.
 - `link_check.implementation`: `playwright` (default), `http` (urllib only), or `http_then_playwright` (HEAD/preflight + HTTP GET, then Playwright when HTML verification or retry rules apply).
 - `link_check.playwright.wait_until`: `commit` (default, fewer false timeouts on slow DOM) or `domcontentloaded`.
 - `link_check.playwright.accept_partial_success_on_navigation_timeout`: when `true` (default), if Playwright times out but the main document already returned HTTP 2xx, the link is treated as OK.

@@ -33,6 +33,24 @@ _CONNECTION_TOKENS = (
 )
 
 
+def is_browser_engine_error(
+    *,
+    status_code: int | None,
+    error_message: str | None,
+    check_meta: str | None,
+) -> bool:
+    """True when Playwright failed without an HTTP response status (navigation/transport)."""
+    if not error_message or status_code is not None:
+        return False
+    if not check_meta:
+        return False
+    try:
+        meta = json.loads(check_meta)
+    except json.JSONDecodeError:
+        return False
+    return meta.get("stage") == "playwright"
+
+
 def classify_error_category(status_code: int | None, error_message: str | None, ok: bool) -> str | None:
     """Map one check result to a deterministic error category."""
     if ok:

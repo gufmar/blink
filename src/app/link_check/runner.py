@@ -8,7 +8,7 @@ from typing import Callable, Protocol
 from urllib.parse import urlsplit, urlunsplit
 
 from app.link_check.http_client import HttpCheckResult
-from app.link_check.reporting import classify_error_category
+from app.link_check.reporting import classify_error_category, is_browser_engine_error
 from app.models.job_config import JobConfig, LinkCheckIgnoreConfig
 from app.persistence.repository import CrawlRepository
 
@@ -61,6 +61,7 @@ def _match_link_check_ignore(
     status_code: int | None,
     error_message: str | None,
     error_category: str | None,
+    check_meta: str | None,
     ignore_config: LinkCheckIgnoreConfig,
 ) -> str | None:
     scheme = urlsplit(target_url).scheme.lower()
@@ -82,6 +83,16 @@ def _match_link_check_ignore(
         token = str(needle).strip()
         if token and token.lower() in message:
             return f"link_check.ignore.error_message_contains:{token}"
+
+    if is_browser_engine_error(
+        status_code=status_code,
+        error_message=error_message,
+        check_meta=check_meta,
+    ):
+        for needle in ignore_config["browser_engine_error_contains"]:
+            token = str(needle).strip()
+            if token and token.lower() in message:
+                return f"link_check.ignore.browser_engine_error_contains:{token}"
 
     host = urlsplit(target_url).netloc.lower()
     for segment in ignore_config["target_netloc_contains"]:
@@ -204,6 +215,7 @@ def run_link_check(
                 status_code=final_result.status_code,
                 error_message=final_result.error_message,
                 error_category=error_category,
+                check_meta=final_result.check_meta,
                 ignore_config=config["link_check"]["ignore"],
             )
             if ignore_decision_reason is not None:

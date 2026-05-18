@@ -2,8 +2,32 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from app.link_check.reporting import build_link_check_report, classify_error_category, report_filename
+from app.link_check.reporting import (
+    build_link_check_report,
+    classify_error_category,
+    is_browser_engine_error,
+    report_filename,
+)
 from app.persistence.repository import LinkCheckResultRecord
+
+
+def test_is_browser_engine_error_playwright_without_http_status() -> None:
+    meta = '{"stage": "playwright", "wait_until": "commit"}'
+    assert is_browser_engine_error(
+        status_code=None,
+        error_message="net::ERR_NAME_NOT_RESOLVED",
+        check_meta=meta,
+    )
+    assert not is_browser_engine_error(
+        status_code=403,
+        error_message="HTTP 403 - Cloudflare challenge",
+        check_meta=meta,
+    )
+    assert not is_browser_engine_error(
+        status_code=None,
+        error_message="net::ERR_NAME_NOT_RESOLVED",
+        check_meta='{"stage": "http"}',
+    )
 
 
 def test_classify_error_category_http_and_transport() -> None:

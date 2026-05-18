@@ -333,6 +333,124 @@ def test_run_link_check_ignores_by_error_message_and_domain(tmp_path: Path) -> N
     connection.close()
 
 
+def test_run_link_check_ignores_challenge_error_message(tmp_path: Path) -> None:
+    connection = connect_sqlite(tmp_path / "crawl_challenge_ignore.db")
+    initialize_schema(connection)
+    repo = CrawlRepository(connection)
+    run_id = repo.create_run("cardano.org")
+    repo.add_page_result(run_id, "https://cardano.org", 0, 200, True)
+    repo.add_link(
+        run_id=run_id,
+        source_url="https://cardano.org",
+        target_url="https://cf.example",
+        is_internal=False,
+    )
+
+    config = load_effective_job_config("jobs/cardano.org.job.json", cwd=Path.cwd())
+    config["meta"]["job_id"] = "cardano.org"
+    config["link_check"]["enabled"] = True
+    config["link_check"]["retry_count"] = 0
+    config["link_check"]["ignore"]["url_schemes"] = []
+    config["link_check"]["ignore"]["http_status"] = []
+    config["link_check"]["ignore"]["error_message_contains"] = ["cloudflare challenge"]
+    config["link_check"]["ignore"]["browser_engine_error_contains"] = []
+
+    checker = FakeChecker(
+        {
+            "https://cf.example": [
+                HttpCheckResult(
+                    status_code=403,
+                    ok=False,
+                    error_message="HTTP 403 Forbidden - Cloudflare challenge",
+                    check_meta='{"stage": "playwright"}',
+                )
+            ],
+        }
+    )
+
+    summary = run_link_check(config=config, repository=repo, checker=checker, run_id=run_id)
+    assert summary.ignored == 1
+    stored = connection.execute(
+        """
+        SELECT decision_reason
+        FROM link_check_results
+        WHERE target_url = 'https://cf.example'
+        """
+    ).fetchone()
+    assert stored is not None
+    assert stored["decision_reason"] == "link_check.ignore.error_message_contains:cloudflare challenge"
+    connection.close()
+
+
+def test_run_link_check_ignores_browser_engine_error_contains(tmp_path: Path) -> None:
+    connection = connect_sqlite(tmp_path / "crawl_browser_engine_ignore.db")
+    initialize_schema(connection)
+    repo = CrawlRepository(connection)
+    run_id = repo.create_run("cardano.org")
+    repo.add_page_result(run_id, "https://cardano.org", 0, 200, True)
+    repo.add_link(
+        run_id=run_id,
+        source_url="https://cardano.org",
+        target_url="https://broken.example",
+        is_internal=False,
+    )
+    repo.add_link(
+        run_id=run_id,
+        source_url="https://cardano.org",
+        target_url="https://cf.example",
+        is_internal=False,
+    )
+
+    config = load_effective_job_config("jobs/cardano.org.job.json", cwd=Path.cwd())
+    config["meta"]["job_id"] = "cardano.org"
+    config["link_check"]["enabled"] = True
+    config["link_check"]["retry_count"] = 0
+    config["link_check"]["ignore"]["url_schemes"] = []
+    config["link_check"]["ignore"]["http_status"] = []
+    config["link_check"]["ignore"]["error_message_contains"] = []
+    config["link_check"]["ignore"]["browser_engine_error_contains"] = ["net::ERR_"]
+
+    playwright_meta = '{"stage": "playwright", "wait_until": "commit"}'
+    checker = FakeChecker(
+        {
+            "https://broken.example": [
+                HttpCheckResult(
+                    status_code=None,
+                    ok=False,
+                    error_message="net::ERR_NAME_NOT_RESOLVED at https://broken.example/",
+                    check_meta=playwright_meta,
+                )
+            ],
+            "https://cf.example": [
+                HttpCheckResult(
+                    status_code=403,
+                    ok=False,
+                    error_message="HTTP 403 - net::ERR_BLOCKED_BY_CLIENT",
+                    check_meta=playwright_meta,
+                )
+            ],
+        }
+    )
+
+    summary = run_link_check(config=config, repository=repo, checker=checker, run_id=run_id)
+    assert summary.checked == 2
+    assert summary.ignored == 1
+    assert summary.reportable_failures == 1
+    stored = connection.execute(
+        """
+        SELECT target_url, decision_state, decision_reason
+        FROM link_check_results
+        ORDER BY target_url ASC
+        """
+    ).fetchall()
+    assert stored[0]["target_url"] == "https://broken.example"
+    assert stored[0]["decision_state"] == "ignored"
+    assert stored[0]["decision_reason"] == "link_check.ignore.browser_engine_error_contains:net::ERR_"
+    assert stored[1]["target_url"] == "https://cf.example"
+    assert stored[1]["decision_state"] != "ignored"
+    connection.close()
+
+
 def test_run_link_check_stops_early_when_max_reportable_reached(tmp_path: Path) -> None:
     connection = connect_sqlite(tmp_path / "crawl_max_reportable.db")
     initialize_schema(connection)

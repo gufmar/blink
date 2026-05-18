@@ -117,12 +117,19 @@
       ],
       "http_status": [
         400,
-        403,
-        429,
         999
       ],
       "error_category": [],
-      "error_message_contains": [],
+      "error_message_contains": [
+        "cloudflare challenge",
+        "cloudflare protected",
+        "vercel challenge"
+      ],
+      "browser_engine_error_contains": [
+        "net::ERR_",
+        "target page, context or browser has been closed",
+        "browser has been closed"
+      ],
       "target_netloc_contains": [],
       "target_domain_equals": []
     },

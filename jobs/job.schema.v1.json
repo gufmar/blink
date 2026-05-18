@@ -486,6 +486,7 @@
         "http_status",
         "error_category",
         "error_message_contains",
+        "browser_engine_error_contains",
         "target_netloc_contains",
         "target_domain_equals"
       ],
@@ -509,6 +510,11 @@
           "default": []
         },
         "error_message_contains": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": []
+        },
+        "browser_engine_error_contains": {
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
           "default": []
