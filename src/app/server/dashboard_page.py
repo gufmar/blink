@@ -1486,14 +1486,33 @@ def render_job_task_history_html(
         branding_links=links,
     )
 
-def _history_metric_cell(current: int, previous: int | None) -> str:
+def _delta_class(diff: int, *, higher_is_better: bool) -> str:
+    if diff == 0:
+        return ""
+    if higher_is_better:
+        return "delta-down" if diff > 0 else "delta-up"
+    return "delta-down" if diff < 0 else "delta-up"
+
+
+def _history_metric_cell(current: int, previous: int | None, *, higher_is_better: bool = False) -> str:
     if previous is None:
         return esc(current)
     diff = current - previous
     if diff == 0:
         return esc(current)
-    diff_class = "delta-down" if diff < 0 else "delta-up"
+    diff_class = _delta_class(diff, higher_is_better=higher_is_better)
     return f'{esc(current)} <span class="{diff_class}">({diff:+d})</span>'
+
+
+def _fmt_external_failed_percent(failed: object, external_total: object) -> str:
+    try:
+        failed_n = int(failed) if failed is not None else 0
+        external = int(external_total) if external_total is not None else 0
+    except (TypeError, ValueError):
+        return "—"
+    if external <= 0:
+        return "0%"
+    return f"{int(round((failed_n / external) * 100.0))}%"
 
 def _category_count_cell(count: int, prev_count: int | None) -> str:
     if prev_count is None:
@@ -1507,7 +1526,7 @@ def _category_count_cell(count: int, prev_count: int | None) -> str:
 def _render_ignore_patterns_panel(ignore_patterns: dict[str, list[str]]) -> str:
     if not ignore_patterns:
         return (
-            '<section class="panel" aria-label="Ignored URL patterns">'
+            '<section class="panel report-section-gap" aria-label="Ignored URL patterns">'
             '<div class="panel-head">Ignored URL patterns (job config)</div>'
             '<p style="padding: 0.75rem 1rem; margin: 0; color: var(--muted);">No crawl ignore patterns configured.</p>'
             "</section>"
@@ -1528,7 +1547,7 @@ def _render_ignore_patterns_panel(ignore_patterns: dict[str, list[str]]) -> str:
         rows.append(f"<tr><td>{esc(labels.get(key, key))}</td><td class=\"wrap-col\">{listed}</td></tr>")
     body = "".join(rows) if rows else '<tr><td colspan="2" class="empty">No patterns configured.</td></tr>'
     return f"""
-<section class="panel" aria-label="Ignored URL patterns">
+<section class="panel report-section-gap" aria-label="Ignored URL patterns">
   <div class="panel-head">Ignored URL patterns (job config)</div>
   <div class="panel-scroll">
   <table class="data-table">
@@ -1565,6 +1584,7 @@ def render_crawl_run_report_html(
             ignored_display = _history_metric_cell(
                 int(cur_ignored),
                 int(prev_ignored) if prev_ignored is not None else None,
+                higher_is_better=False,
             )
         run_label = f"run {row.get('run_id')}"
         if row.get("is_current"):
@@ -1575,8 +1595,8 @@ def render_crawl_run_report_html(
     <td class="mono time">{esc(_fmt_dt_short(row.get("started_at")))}</td>
     <td class="mono time">{esc(_fmt_dt_short(row.get("finished_at"), ongoing=not row.get("finished_at")))}</td>
     <td class="mono">{esc(row.get("duration") or "—")}</td>
-    <td class="mono">{_history_metric_cell(int(row.get("pages_visited") or 0), prev_pages)}</td>
-    <td class="mono">{_history_metric_cell(int(row.get("external_links") or 0), prev_external)}</td>
+    <td class="mono">{_history_metric_cell(int(row.get("pages_visited") or 0), prev_pages, higher_is_better=True)}</td>
+    <td class="mono">{_history_metric_cell(int(row.get("external_links") or 0), prev_external, higher_is_better=True)}</td>
     <td class="mono">{ignored_display}</td>
     <td class="mono">{esc(row.get("pages_failed"))}</td>
   </tr>"""
@@ -1605,7 +1625,7 @@ def render_crawl_run_report_html(
     run_json_cell = _html_action_link(links.get("run_json"), "json")
 
     run_stats = f"""
-<section class="metrics" aria-label="Crawl summary">
+<section class="metrics report-metrics-gap" aria-label="Crawl summary">
   <div class="metric"><div class="value">{esc(run.get("pages_visited"))}</div><div class="label">Pages crawled</div></div>
   <div class="metric"><div class="value">{esc(run.get("pages_failed"))}</div><div class="label">Pages failed</div></div>
   <div class="metric"><div class="value">{esc(run.get("links_discovered"))}</div><div class="label">Links discovered</div></div>
@@ -1616,10 +1636,11 @@ def render_crawl_run_report_html(
 """
     body_extra = f"""
 {run_stats}
-<section class="panel" aria-label="Crawl history comparison">
+<section class="panel report-section-gap" aria-label="Crawl history comparison">
   <div class="panel-head">Crawl history (this run and up to 3 previous)</div>
   <p style="padding: 0 1rem 0.5rem; margin: 0; font-size: 0.8rem; color: var(--muted);">
     Parentheses show change vs the next older run.
+    For pages and external links, green means more than the previous run; for ignored, green means fewer.
     Ignored counts come from the latest link-check on each crawl when available.
   </p>
   <div class="panel-scroll">
@@ -1675,6 +1696,7 @@ def render_link_check_run_report_html(
     job: dict[str, Any],
     run: dict[str, Any],
     totals: dict[str, int],
+    link_check_history: list[dict[str, Any]],
     failed_summary: dict[str, Any],
     filters: dict[str, Any],
     failed_links: list[dict[str, Any]],
@@ -1683,51 +1705,49 @@ def render_link_check_run_report_html(
 ) -> str:
     """Render broken-links report for one link-check run."""
 
-    comparison_run_ids: list[int] = list(failed_summary.get("comparison_run_ids") or [])
-    per_run_counts: dict[int, dict[str, int]] = dict(failed_summary.get("per_run_category_counts") or {})
-    all_categories: set[str] = set()
-    for counts in per_run_counts.values():
-        all_categories.update(counts.keys())
+    history_rows: list[str] = []
+    for i, row in enumerate(link_check_history):
+        prev = link_check_history[i + 1] if i + 1 < len(link_check_history) else None
+        prev_checked = int(prev["checked_total"]) if prev else None
+        prev_failed = int(prev["failed_total"]) if prev else None
+        prev_ignored = int(prev["ignored_total"]) if prev and prev.get("ignored_total") is not None else None
+        prev_passed = int(prev["passed_total"]) if prev else None
+        cur_ignored = row.get("ignored_total")
+        ignored_display = "—"
+        if cur_ignored is not None:
+            ignored_display = _history_metric_cell(
+                int(cur_ignored),
+                prev_ignored,
+                higher_is_better=False,
+            )
+        run_label = f"run {row.get('run_id')}"
+        if row.get("is_current"):
+            run_label += " (this run)"
+        history_rows.append(
+            f"""<tr>
+    <td class="mono">{esc(run_label)}</td>
+    <td class="mono time">{esc(_fmt_dt_short(row.get("started_at")))}</td>
+    <td class="mono time">{esc(_fmt_dt_short(row.get("finished_at"), ongoing=not row.get("finished_at")))}</td>
+    <td class="mono">{esc(row.get("duration") or "—")}</td>
+    <td class="mono">{_history_metric_cell(int(row.get("checked_total") or 0), prev_checked, higher_is_better=True)}</td>
+    <td class="mono">{_history_metric_cell(int(row.get("failed_total") or 0), prev_failed, higher_is_better=False)}</td>
+    <td class="mono">{ignored_display}</td>
+    <td class="mono">{_history_metric_cell(int(row.get("passed_total") or 0), prev_passed, higher_is_better=True)}</td>
+  </tr>"""
+        )
+    history_body = "".join(history_rows) if history_rows else (
+        '<tr><td colspan="8" class="empty">No link-check history available.</td></tr>'
+    )
 
     run_stats = f"""
-<section class="metrics" aria-label="Link-check summary">
+<section class="metrics report-metrics-gap" aria-label="Link-check summary">
   <div class="metric"><div class="value">{esc(run.get("checked_total", "—"))}</div><div class="label">Checked</div></div>
   <div class="metric"><div class="value">{esc(run.get("failed_total", failed_summary.get("failed_total")))}</div><div class="label">Failed</div></div>
   <div class="metric"><div class="value">{esc(run.get("ignored_total", failed_summary.get("ignored_total", 0)))}</div><div class="label">Ignored</div></div>
   <div class="metric"><div class="value">{esc(run.get("passed_total", "—"))}</div><div class="label">Passed</div></div>
-  <div class="metric"><div class="value">{esc(_fmt_count_with_ratio(failed_summary.get("failed_total"), totals.get("external_links_total")))}</div><div class="label">Failed vs external URLs</div></div>
-  <div class="metric"><div class="value">{esc(run.get("link_check_run_id") or run.get("run_id"))}</div><div class="label">Link-check run id</div></div>
+  <div class="metric"><div class="value">{esc(_fmt_external_failed_percent(failed_summary.get("failed_total"), totals.get("external_links_total")))}</div><div class="label">External vs failed</div></div>
 </section>
 """
-    column_labels = [f"run {rid}" for rid in comparison_run_ids]
-    category_rows_list: list[str] = []
-    summary_cells: list[str] = []
-    for col_idx, rid in enumerate(comparison_run_ids):
-        total = sum(int(per_run_counts.get(rid, {}).get(cat, 0)) for cat in all_categories)
-        prev_rid = comparison_run_ids[col_idx + 1] if col_idx + 1 < len(comparison_run_ids) else None
-        prev_total = (
-            sum(int(per_run_counts.get(prev_rid, {}).get(cat, 0)) for cat in all_categories)
-            if prev_rid is not None
-            else None
-        )
-        summary_cells.append(f'<td class="mono"><strong>{_category_count_cell(total, prev_total)}</strong></td>')
-
-    for category in sorted(all_categories):
-        counts = [int(per_run_counts.get(rid, {}).get(category, 0)) for rid in comparison_run_ids]
-        cells_html = "".join(
-            f'<td class="mono">{_category_count_cell(count, counts[i + 1] if i + 1 < len(counts) else None)}</td>'
-            for i, count in enumerate(counts)
-        )
-        category_rows_list.append(f"<tr><td>{esc(category)}</td>{cells_html}</tr>")
-    summary_row = (
-        f'<tr class="summary-row"><td><strong>Total</strong></td>{"".join(summary_cells)}</tr>'
-        if summary_cells
-        else ""
-    )
-    category_rows = "".join(category_rows_list) + summary_row
-    if not category_rows_list:
-        colspan = max(len(column_labels) + 1, 2)
-        category_rows = f'<tr><td colspan="{colspan}" class="empty">No failed external links in this run.</td></tr>'
 
     status_options = sorted(list(filters.get("status_options") or []))
     category_options = sorted(list(filters.get("category_options") or []))
@@ -1776,19 +1796,25 @@ def render_link_check_run_report_html(
 
     body_extra = f"""
 {run_stats}
-<section class="panel" aria-label="Failed by category">
-  <div class="panel-head">Failed external links by error category</div>
+<section class="panel report-section-gap" aria-label="Link-check history comparison">
+  <div class="panel-head">Link-check history (this run and up to 3 previous on this crawl)</div>
   <p style="padding: 0 1rem 0.5rem; margin: 0; font-size: 0.8rem; color: var(--muted);">
-    Green deltas are decreases vs the next older column; red deltas are increases.
+    Parentheses show change vs the next older run.
+    Green deltas are decreases; red deltas are increases (for failed and ignored counts).
   </p>
   <div class="panel-scroll">
   <table class="data-table">
-    <thead><tr><th>Error category</th>{''.join(f'<th>{esc(label)}</th>' for label in column_labels)}</tr></thead>
-    <tbody>{category_rows}</tbody>
+    <thead>
+      <tr>
+        <th>Run</th><th>Started</th><th>Finished</th><th>Duration</th>
+        <th>Checked</th><th>Failed</th><th>Ignored</th><th>Passed</th>
+      </tr>
+    </thead>
+    <tbody>{history_body}</tbody>
   </table>
   </div>
 </section>
-<section class="panel" aria-label="Global filters">
+<section class="panel report-section-gap" aria-label="Global filters">
   <div class="panel-head">Filters</div>
   <div class="filters-row">
     <form method="get" action="{filter_action}" class="filters-form">
@@ -1803,7 +1829,7 @@ def render_link_check_run_report_html(
     </form>
   </div>
 </section>
-<section class="panel" aria-label="Failed links" style="margin-top: 1rem;">
+<section class="panel report-section-gap" aria-label="Failed links">
   <div class="panel-head">Failed link-check results</div>
   <div class="panel-scroll">
   <table class="data-table sticky-head">
@@ -1814,7 +1840,7 @@ def render_link_check_run_report_html(
   </table>
   </div>
 </section>
-<section class="panel" aria-label="Ignored external links" style="margin-top: 1rem;">
+<section class="panel report-section-gap" aria-label="Ignored external links">
   <div class="panel-head">Ignored link-check results</div>
   <div class="panel-scroll">
   <table class="data-table">
@@ -1942,6 +1968,8 @@ def _shared_styles() -> str:
   .auth-user { opacity: 0.9; margin-left: 0.5rem; }
   .wrap { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
   .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; margin-bottom: 1rem; }
+  .report-metrics-gap { margin-top: 1rem; }
+  .report-section-gap { margin-top: 1rem; }
   .metric { background: var(--card); border-radius: var(--radius); padding: 1.15rem 1.25rem; box-shadow: var(--shadow); border: 1px solid var(--border); }
   .metric .value { font-size: 1.75rem; font-weight: 700; color: var(--cardano-blue); letter-spacing: -0.03em; }
   .metric .label { font-size: 0.8rem; color: var(--muted); margin-top: 0.25rem; text-transform: uppercase; letter-spacing: 0.04em; }

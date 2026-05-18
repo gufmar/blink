@@ -389,6 +389,43 @@ def _build_crawl_history_comparison(
     return rows
 
 
+def _build_link_check_history_comparison(
+    repo: CrawlRepository,
+    job_id: str,
+    anchor_link_check_run_id: int,
+    based_on_crawl_run_id: int,
+    *,
+    limit_previous: int = 3,
+) -> list[dict[str, Any]]:
+    all_runs = repo.list_link_check_run_history(job_id, limit=200)
+    same_crawl = [rec for rec in all_runs if int(rec.based_on_crawl_run_id) == int(based_on_crawl_run_id)]
+    by_id = {rec.run_id: rec for rec in same_crawl}
+    idx = next((i for i, rec in enumerate(same_crawl) if rec.run_id == anchor_link_check_run_id), None)
+    run_ids = [anchor_link_check_run_id]
+    if idx is not None:
+        for i in range(idx + 1, min(idx + 1 + limit_previous, len(same_crawl))):
+            run_ids.append(same_crawl[i].run_id)
+    rows: list[dict[str, Any]] = []
+    for rid in run_ids:
+        rec = by_id.get(rid)
+        if rec is None:
+            continue
+        rows.append(
+            {
+                "run_id": rec.run_id,
+                "started_at": rec.started_at,
+                "finished_at": rec.finished_at,
+                "duration": _format_run_duration_label(rec.started_at, rec.finished_at),
+                "checked_total": rec.checked_total,
+                "passed_total": rec.passed_total,
+                "failed_total": rec.failed_total,
+                "ignored_total": rec.ignored_total,
+                "is_current": rid == anchor_link_check_run_id,
+            }
+        )
+    return rows
+
+
 def _serialize_link_check_history(job_id: str, repo: CrawlRepository | None, *, limit: int) -> list[dict[str, Any]]:
     if repo is None:
         return []
@@ -1729,6 +1766,7 @@ async def dashboard_results_run(request: Request) -> HTMLResponse:
         run_external_links = repo.count_external_links_for_run(selected_crawl_run_id)
         latest_link_check_run_id = repo.get_latest_link_check_run_id_for_crawl(selected_crawl_run_id)
         link_check_summary: dict[str, Any] = {}
+        link_check_history_rows: list[dict[str, Any]] = []
         if selected_link_check_run_id is not None:
             lc_run = repo.get_link_check_run(selected_link_check_run_id)
             if lc_run is not None:
@@ -1738,6 +1776,12 @@ async def dashboard_results_run(request: Request) -> HTMLResponse:
                     "failed_total": lc_run.failed_total,
                     "ignored_total": lc_run.ignored_total,
                 }
+                link_check_history_rows = _build_link_check_history_comparison(
+                    repo,
+                    job_id,
+                    selected_link_check_run_id,
+                    selected_crawl_run_id,
+                )
     finally:
         _close_repo(repo_and_conn)
 
@@ -1852,12 +1896,10 @@ async def dashboard_results_run(request: Request) -> HTMLResponse:
                 "pages_total": counts["internal_urls_distinct"],
                 "external_links_total": counts["external_urls_distinct"],
             },
+            link_check_history=link_check_history_rows,
             failed_summary={
                 "failed_total": len(active_failed_all),
                 "ignored_total": len(ignored_failed_all),
-                "by_category": category_counts,
-                "per_run_category_counts": per_run_counts,
-                "comparison_run_ids": comparison_run_ids,
             },
             filters={
                 "include_status": include_status,

@@ -263,7 +263,9 @@ def test_dashboard_results_pages(tmp_path: Path) -> None:
     assert "https://ignored.example.net" in link_page.text
     assert "Ignored link-check results" in link_page.text
     assert "delta-down" in link_page.text or "delta-up" in link_page.text
-    assert "<strong>Total</strong>" in link_page.text
+    assert "Link-check history" in link_page.text
+    assert "External vs failed" in link_page.text
+    assert "Link-check run id" not in link_page.text or link_page.text.count("link-check run id") <= 2
     assert "Apply filters" in link_page.text
     assert "Failed crawl pages" not in link_page.text
 
