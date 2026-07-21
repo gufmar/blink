@@ -419,3 +419,86 @@ def test_get_latest_link_check_run_id_for_crawl(tmp_path) -> None:
     )
     assert repo.get_latest_link_check_run_id_for_crawl(crawl_id) == lc2
     connection.close()
+
+
+def test_count_link_check_result_totals_for_runs(tmp_path) -> None:
+    connection = connect_sqlite(tmp_path / "lc-counts.db")
+    initialize_schema(connection)
+    repo = CrawlRepository(connection)
+    crawl_id = repo.create_run("job-lc-counts")
+    repo.add_page_result(crawl_id, "https://example.org", 0, 200, True)
+    repo.add_link(
+        run_id=crawl_id,
+        source_url="https://example.org",
+        target_url="https://broken.example",
+        is_internal=False,
+    )
+    repo.add_link(
+        run_id=crawl_id,
+        source_url="https://example.org",
+        target_url="https://ignored.example",
+        is_internal=False,
+    )
+    repo.add_link(
+        run_id=crawl_id,
+        source_url="https://example.org",
+        target_url="https://ok.example",
+        is_internal=False,
+    )
+    targets = {row.target_url: row for row in repo.list_links_for_check(crawl_id, limit=10)}
+    lc_run_id = repo.create_link_check_run(
+        job_id="job-lc-counts",
+        based_on_crawl_run_id=crawl_id,
+        started_at="2025-01-01T00:00:00+00:00",
+    )
+    repo.add_link_check_result(
+        crawl_link_id=targets["https://broken.example"].link_id,
+        crawl_run_id=crawl_id,
+        link_check_run_id=lc_run_id,
+        target_url="https://broken.example",
+        status_code=404,
+        ok=False,
+        error_message="missing",
+        error_category="client",
+    )
+    repo.add_link_check_result(
+        crawl_link_id=targets["https://ignored.example"].link_id,
+        crawl_run_id=crawl_id,
+        link_check_run_id=lc_run_id,
+        target_url="https://ignored.example",
+        status_code=403,
+        ok=False,
+        error_message="blocked",
+        error_category="client",
+        decision_state="ignored",
+        decision_reason="link_check.ignore.http_status:403",
+    )
+    repo.add_link_check_result(
+        crawl_link_id=targets["https://ok.example"].link_id,
+        crawl_run_id=crawl_id,
+        link_check_run_id=lc_run_id,
+        target_url="https://ok.example",
+        status_code=200,
+        ok=True,
+        error_message=None,
+    )
+    repo.finish_link_check_run(
+        link_check_run_id=lc_run_id,
+        finished_at="2025-01-01T01:00:00+00:00",
+        checked_total=99,
+        passed_total=88,
+        failed_total=77,
+        errored_total=0,
+        ignored_total=66,
+        pending_tolerance_total=0,
+        reportable_failures_total=1,
+    )
+
+    totals = repo.count_link_check_result_totals_for_runs([lc_run_id])
+    assert totals[lc_run_id] == {
+        "checked_total": 3,
+        "passed_total": 1,
+        "failed_total": 1,
+        "ignored_total": 1,
+    }
+    connection.close()

@@ -849,6 +849,42 @@ class CrawlRepository:
             for row in rows
         ]
 
+    def count_link_check_result_totals_for_runs(
+        self,
+        link_check_run_ids: list[int],
+    ) -> dict[int, dict[str, int]]:
+        if not link_check_run_ids:
+            return {}
+        placeholders = ",".join("?" * len(link_check_run_ids))
+        rows = self._connection.execute(
+            f"""
+            SELECT
+                link_check_run_id,
+                COUNT(*) AS checked_total,
+                SUM(CASE WHEN ok = 1 THEN 1 ELSE 0 END) AS passed_total,
+                SUM(CASE WHEN ok = 0 AND decision_state = 'ignored' THEN 1 ELSE 0 END) AS ignored_total,
+                SUM(
+                    CASE
+                        WHEN ok = 0 AND COALESCE(decision_state, '') != 'ignored' THEN 1
+                        ELSE 0
+                    END
+                ) AS failed_total
+            FROM link_check_results
+            WHERE link_check_run_id IN ({placeholders})
+            GROUP BY link_check_run_id
+            """,
+            tuple(link_check_run_ids),
+        ).fetchall()
+        return {
+            int(row["link_check_run_id"]): {
+                "checked_total": int(row["checked_total"] or 0),
+                "passed_total": int(row["passed_total"] or 0),
+                "ignored_total": int(row["ignored_total"] or 0),
+                "failed_total": int(row["failed_total"] or 0),
+            }
+            for row in rows
+        }
+
     def create_link_check_run(self, *, job_id: str, based_on_crawl_run_id: int, started_at: str) -> int:
         cursor = self._connection.execute(
             """

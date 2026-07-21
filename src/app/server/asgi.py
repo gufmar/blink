@@ -45,7 +45,6 @@ from app.runtime.job_paths import build_job_paths
 from app.schedule.service import BlinkSchedulerService
 from app.server.auth_routes import auth_route_handlers
 from app.server.dashboard_page import (
-    _active_failed_count,
     esc as _html_esc,
     render_admin_runtime_html,
     render_file_viewer_html,
@@ -247,6 +246,28 @@ def _split_failed_and_ignored_link_results(rows: list[Any]) -> tuple[list[Any], 
     return failed_rows, ignored_rows
 
 
+def _apply_link_check_result_totals(
+    repo: CrawlRepository,
+    runs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    run_ids = [int(row["run_id"]) for row in runs if row.get("run_id") is not None]
+    totals_by_run = repo.count_link_check_result_totals_for_runs(run_ids)
+    enriched: list[dict[str, Any]] = []
+    for row in runs:
+        run_id = int(row["run_id"])
+        totals = totals_by_run.get(run_id, {})
+        enriched.append(
+            {
+                **row,
+                "checked_total": totals.get("checked_total", int(row.get("checked_total") or 0)),
+                "passed_total": totals.get("passed_total", int(row.get("passed_total") or 0)),
+                "failed_total": totals.get("failed_total", 0),
+                "ignored_total": totals.get("ignored_total", 0),
+            }
+        )
+    return enriched
+
+
 def _load_job_entries(jobs_root: Path) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     for job_path in sorted(jobs_root.glob("*.job.json")):
@@ -424,7 +445,7 @@ def _build_link_check_history_comparison(
                 "is_current": rid == anchor_link_check_run_id,
             }
         )
-    return rows
+    return _apply_link_check_result_totals(repo, rows)
 
 
 def _serialize_link_check_history(job_id: str, repo: CrawlRepository | None, *, limit: int) -> list[dict[str, Any]]:
@@ -434,20 +455,23 @@ def _serialize_link_check_history(job_id: str, repo: CrawlRepository | None, *, 
         runs = repo.list_link_check_run_history(job_id, limit=limit)
     except sqlite3.Error:
         return []
-    return [
-        {
-            "run_id": rec.run_id,
-            "started_at": rec.started_at,
-            "finished_at": rec.finished_at,
-            "based_on_crawl_run_id": rec.based_on_crawl_run_id,
-            "checked_total": rec.checked_total,
-            "passed_total": rec.passed_total,
-            "failed_total": rec.failed_total,
-            "errored_total": rec.errored_total,
-            "ignored_total": rec.ignored_total,
-        }
-        for rec in runs
-    ]
+    return _apply_link_check_result_totals(
+        repo,
+        [
+            {
+                "run_id": rec.run_id,
+                "started_at": rec.started_at,
+                "finished_at": rec.finished_at,
+                "based_on_crawl_run_id": rec.based_on_crawl_run_id,
+                "checked_total": rec.checked_total,
+                "passed_total": rec.passed_total,
+                "failed_total": rec.failed_total,
+                "errored_total": rec.errored_total,
+                "ignored_total": rec.ignored_total,
+            }
+            for rec in runs
+        ],
+    )
 
 
 _LOG_FILENAME_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -804,10 +828,7 @@ async def schedule_dashboard(request: Request) -> HTMLResponse:
             else ""
         )
         external_total = int(counts.get("external_urls_distinct") or 0)
-        failed_total = _active_failed_count(
-            latest_link.get("failed_total") if latest_link else None,
-            latest_link.get("ignored_total") if latest_link else None,
-        ) or 0
+        failed_total = int(latest_link.get("failed_total") or 0) if latest_link else 0
         failed_ratio = int(round((failed_total / external_total) * 100.0)) if external_total > 0 else 0
         ignored_total = int(latest_link.get("ignored_total") or 0) if latest_link else 0
         ignored_ratio = int(round((ignored_total / external_total) * 100.0)) if external_total > 0 else 0
@@ -1774,11 +1795,15 @@ async def dashboard_results_run(request: Request) -> HTMLResponse:
         if selected_link_check_run_id is not None:
             lc_run = repo.get_link_check_run(selected_link_check_run_id)
             if lc_run is not None:
+                result_totals = repo.count_link_check_result_totals_for_runs([selected_link_check_run_id]).get(
+                    selected_link_check_run_id,
+                    {},
+                )
                 link_check_summary = {
-                    "checked_total": lc_run.checked_total,
-                    "passed_total": lc_run.passed_total,
-                    "failed_total": lc_run.failed_total,
-                    "ignored_total": lc_run.ignored_total,
+                    "checked_total": result_totals.get("checked_total", lc_run.checked_total),
+                    "passed_total": result_totals.get("passed_total", lc_run.passed_total),
+                    "failed_total": result_totals.get("failed_total", 0),
+                    "ignored_total": result_totals.get("ignored_total", 0),
                 }
                 link_check_history_rows = _build_link_check_history_comparison(
                     repo,

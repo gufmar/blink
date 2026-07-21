@@ -288,6 +288,11 @@ def test_dashboard_results_pages(tmp_path: Path) -> None:
         re.S,
     )
     assert history_row_match is not None
+    assert re.search(
+        r'aria-label="Link-check summary".*?<div class="metric"><div class="value">1</div><div class="label">Failed</div>',
+        link_page.text,
+        re.S,
+    ) is not None
     assert "External vs failed" in link_page.text
     assert "Link-check run id" not in link_page.text or link_page.text.count("link-check run id") <= 2
     assert "Apply filters" in link_page.text
