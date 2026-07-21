@@ -45,6 +45,7 @@ from app.runtime.job_paths import build_job_paths
 from app.schedule.service import BlinkSchedulerService
 from app.server.auth_routes import auth_route_handlers
 from app.server.dashboard_page import (
+    _active_failed_count,
     esc as _html_esc,
     render_admin_runtime_html,
     render_file_viewer_html,
@@ -803,7 +804,10 @@ async def schedule_dashboard(request: Request) -> HTMLResponse:
             else ""
         )
         external_total = int(counts.get("external_urls_distinct") or 0)
-        failed_total = int(latest_link.get("failed_total") or 0) if latest_link else 0
+        failed_total = _active_failed_count(
+            latest_link.get("failed_total") if latest_link else None,
+            latest_link.get("ignored_total") if latest_link else None,
+        ) or 0
         failed_ratio = int(round((failed_total / external_total) * 100.0)) if external_total > 0 else 0
         ignored_total = int(latest_link.get("ignored_total") or 0) if latest_link else 0
         ignored_ratio = int(round((ignored_total / external_total) * 100.0)) if external_total > 0 else 0

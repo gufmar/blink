@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -222,6 +223,7 @@ def test_dashboard_results_pages(tmp_path: Path) -> None:
     assert jobs_page.status_code == 200
     assert "Blink results" in jobs_page.text
     assert "/dashboard/results/zzz" in jobs_page.text
+    assert re.search(r"tested: 2 .*ignored: 1 .*failed: 1 ", jobs_page.text, re.S) is not None
 
     crawls_page = client.get("/dashboard/results/zzz/crawls")
     assert crawls_page.status_code == 200
@@ -231,11 +233,21 @@ def test_dashboard_results_pages(tmp_path: Path) -> None:
     lc_only = client.get("/dashboard/results/zzz/link-checks")
     assert lc_only.status_code == 200
     assert f"?task_type=link_check" in lc_only.text
+    assert re.search(
+        rf"<span class=\"mono\">{link_check_run_id}</span>.*?<td class=\"mono\">2</td>\s*<td class=\"mono\">1</td>",
+        lc_only.text,
+        re.S,
+    ) is not None
 
     job_page = client.get("/dashboard/results/zzz")
     assert job_page.status_code == 200
     assert f"/dashboard/results/zzz/runs/{run_id}" in job_page.text
     assert "Run history" in job_page.text
+    assert re.search(
+        rf"<span class=\"mono\">{link_check_run_id}</span>.*?<td class=\"mono\">2</td>\s*<td class=\"mono\">1</td>",
+        job_page.text,
+        re.S,
+    ) is not None
 
     log_day = date.today().isoformat()
     log_dir = tmp_path / "data" / "zzz" / "logs"
@@ -264,6 +276,18 @@ def test_dashboard_results_pages(tmp_path: Path) -> None:
     assert "Ignored link-check results" in link_page.text
     assert "delta-down" in link_page.text or "delta-up" in link_page.text
     assert "Link-check history" in link_page.text
+    history_row_match = re.search(
+        rf"run {link_check_run_id} \(this run\)</td>\s*"
+        rf"<td class=\"mono time\">.*?</td>\s*"
+        rf"<td class=\"mono time\">.*?</td>\s*"
+        rf"<td class=\"mono\">.*?</td>\s*"
+        rf"<td class=\"mono\">2(?:\s*<span.*?</span>)?</td>\s*"
+        rf"<td class=\"mono\">1(?:\s*<span.*?</span>)?</td>\s*"
+        rf"<td class=\"mono\">1(?:\s*<span.*?</span>)?</td>",
+        link_page.text,
+        re.S,
+    )
+    assert history_row_match is not None
     assert "External vs failed" in link_page.text
     assert "Link-check run id" not in link_page.text or link_page.text.count("link-check run id") <= 2
     assert "Apply filters" in link_page.text
@@ -298,6 +322,11 @@ def test_dashboard_results_pages(tmp_path: Path) -> None:
     assert "\u2b11" in history_page.text
     assert f'<span class="mono">{link_check_run_id}</span>' in history_page.text
     assert f"/dashboard/results/zzz/runs/{run_id}?task_type=crawl" in history_page.text
+    assert re.search(
+        rf"<span class=\"mono\">{link_check_run_id}</span>.*?<td class=\"mono\">2</td>\s*<td class=\"mono\">1</td>",
+        history_page.text,
+        re.S,
+    ) is not None
     assert "Download JSON" not in history_page.text or "json" in history_page.text.lower()
 
     log_ok = client.get(f"/dashboard/results/zzz/logs/{log_day}")

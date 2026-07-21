@@ -25,6 +25,14 @@ def _fmt_dt_short(value: object, *, ongoing: bool = False) -> str:
         parsed = parsed.astimezone(UTC)
     return parsed.strftime("%Y-%m-%d %H:%M")
 
+def _active_failed_count(failed_total: object, ignored_total: object) -> int | None:
+    if failed_total is None:
+        return None
+    failed = int(failed_total or 0)
+    if ignored_total is None:
+        return failed
+    return max(0, failed - int(ignored_total or 0))
+
 def _html_action_link(url: object, label: str) -> str:
     href = str(url or "").strip()
     if not href:
@@ -265,11 +273,12 @@ def render_schedule_dashboard_html(payload: dict[str, Any], *, links: dict[str, 
             )
         else:
             latest_link = latest or {}
+            failed_total = _active_failed_count(src.get("failed_total"), src.get("ignored_total"))
             summary = (
                 f'tested: {esc(latest_link.get("checked_total") if latest_link.get("checked_total") is not None else "—")} · '
                 f'ignored: {esc(src.get("ignored_total") if src.get("ignored_total") is not None else "—")} '
                 f'({esc(src.get("ignored_ratio") if src.get("ignored_ratio") is not None else 0)}%) · '
-                f'failed: {esc(src.get("failed_total") if src.get("failed_total") is not None else "—")} '
+                f'failed: {esc(failed_total if failed_total is not None else "—")} '
                 f'({esc(src.get("failed_ratio") if src.get("failed_ratio") is not None else 0)}%)'
             )
         if not latest and when == "—":
@@ -860,6 +869,7 @@ def render_results_job_html(
         if task_type == "all":
             if row_task_type == "link_check":
                 based_on = run.get("based_on_crawl_run_id")
+                failed_total = _active_failed_count(run.get("failed_total"), run.get("ignored_total"))
                 run_id_cell = (
                     f'<span title="{esc(f"this link-check is pased on crawl run {based_on}")}">{esc(run_id)}</span>'
                     if based_on is not None
@@ -872,7 +882,7 @@ def render_results_job_html(
     <td class="mono">{run_id_cell}</td>
     <td class="mono">{esc(run.get("checked_total") if run.get("checked_total") is not None else "—")}</td>
     <td class="mono">{_with_ratio_tooltip(run.get("ignored_total"), total_external_urls, "ignored")}</td>
-    <td class="mono">{_with_ratio_tooltip(run.get("failed_total"), total_external_urls, "failed")}</td>
+    <td class="mono">{_with_ratio_tooltip(failed_total, total_external_urls, "failed")}</td>
     {log_cell}
     {rep_cell}
   </tr>"""
@@ -889,6 +899,7 @@ def render_results_job_html(
   </tr>"""
         if task_type == "link_check":
             based_on = run.get("based_on_crawl_run_id")
+            failed_total = _active_failed_count(run.get("failed_total"), run.get("ignored_total"))
             run_id_cell = (
                 f'<span title="{esc(f"this link-check is pased on crawl run {based_on}")}">{esc(run_id)}</span>'
                 if based_on is not None
@@ -900,7 +911,7 @@ def render_results_job_html(
     <td class="mono">{run_id_cell}</td>
     <td class="mono">{esc(run.get("checked_total") if run.get("checked_total") is not None else "—")}</td>
     <td class="mono">{_with_ratio_tooltip(run.get("ignored_total"), total_external_urls, "ignored")}</td>
-    <td class="mono">{_with_ratio_tooltip(run.get("failed_total"), total_external_urls, "failed")}</td>
+    <td class="mono">{_with_ratio_tooltip(failed_total, total_external_urls, "failed")}</td>
     {log_cell}
     {rep_cell}
   </tr>"""
@@ -1407,7 +1418,7 @@ def _history_run_row(run: dict[str, Any], *, child: bool) -> str:
     finished = esc(_fmt_dt_short(run.get("finished_at"), ongoing=True))
     if child:
         visited = _fmt_count(run.get("checked_total"))
-        failed = _fmt_count(run.get("failed_total"))
+        failed = _fmt_count(_active_failed_count(run.get("failed_total"), run.get("ignored_total")))
     else:
         visited = _fmt_count(run.get("pages_visited"))
         failed = _fmt_count(run.get("pages_failed"))
@@ -1719,10 +1730,17 @@ def render_link_check_run_report_html(
     for i, row in enumerate(link_check_history):
         prev = link_check_history[i + 1] if i + 1 < len(link_check_history) else None
         prev_checked = int(prev["checked_total"]) if prev else None
-        prev_failed = int(prev["failed_total"]) if prev else None
+        prev_failed_raw = int(prev["failed_total"]) if prev else None
         prev_ignored = int(prev["ignored_total"]) if prev and prev.get("ignored_total") is not None else None
         prev_passed = int(prev["passed_total"]) if prev else None
+        cur_failed_raw = int(row.get("failed_total") or 0)
         cur_ignored = row.get("ignored_total")
+        cur_failed = cur_failed_raw
+        prev_failed = prev_failed_raw
+        if cur_ignored is not None:
+            cur_failed = max(0, cur_failed_raw - int(cur_ignored))
+            if prev_failed_raw is not None and prev_ignored is not None:
+                prev_failed = max(0, prev_failed_raw - prev_ignored)
         ignored_display = "—"
         if cur_ignored is not None:
             ignored_display = _history_metric_cell(
@@ -1740,7 +1758,7 @@ def render_link_check_run_report_html(
     <td class="mono time">{esc(_fmt_dt_short(row.get("finished_at"), ongoing=not row.get("finished_at")))}</td>
     <td class="mono">{esc(row.get("duration") or "—")}</td>
     <td class="mono">{_history_metric_cell(int(row.get("checked_total") or 0), prev_checked, higher_is_better=True)}</td>
-    <td class="mono">{_history_metric_cell(int(row.get("failed_total") or 0), prev_failed, higher_is_better=False)}</td>
+    <td class="mono">{_history_metric_cell(cur_failed, prev_failed, higher_is_better=False)}</td>
     <td class="mono">{ignored_display}</td>
     <td class="mono">{_history_metric_cell(int(row.get("passed_total") or 0), prev_passed, higher_is_better=True)}</td>
   </tr>"""
